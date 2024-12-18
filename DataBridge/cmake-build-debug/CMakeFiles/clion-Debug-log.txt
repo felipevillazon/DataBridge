@@ -1,0 +1,12 @@
+/home/felipevillazon/.local/share/JetBrains/Toolbox/apps/clion/bin/cmake/linux/x64/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/home/felipevillazon/.local/share/JetBrains/Toolbox/apps/clion/bin/ninja/linux/x64/ninja -G Ninja -S /home/felipevillazon/Xelips/DataBridge -B /home/felipevillazon/Xelips/DataBridge/cmake-build-debug
+-- Found ODBC: /usr/lib/x86_64-linux-gnu/libodbc.so
+CMake Error at CMakeLists.txt:8 (find_package):
+  Found package configuration file:
+
+    /usr/local/lib/cmake/open62541/open62541Config.cmake
+
+  but it set open62541_FOUND to FALSE so package "open62541" is considered to
+  be NOT FOUND.
+
+
+-- Configuring incomplete, errors occurred!

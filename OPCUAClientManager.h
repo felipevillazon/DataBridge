@@ -9,6 +9,8 @@
 #include <iostream>
 #include <string>
 #include <open62541pp/client.hpp>
+#include <open62541pp/open62541pp.h>
+
 
 using namespace std;
 using namespace opcua;
@@ -23,11 +25,13 @@ public:
     void disconnect();  // disconnect from OPC UA Server
     bool getData();   // get data from OPC UA Sever
 
+
 private:
     string endpointUrl; // the endpoint for the client to connect to. Such as "opc.tcp://host:port".
     string username;    // username credentials
     string password;    // password credentials
     Client client;       // instance UA_Client to create client
+
     //UA_ClientConfig* config;  // pointer UA_ClientConfig to configure client
 
 };

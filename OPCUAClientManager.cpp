@@ -4,6 +4,7 @@
 
 #include "OPCUAClientManager.h"
 #include "Logger.h"
+#include <open62541pp/node.hpp>
 
 // constructor
 OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& username, const string& password)
@@ -18,6 +19,39 @@ OPCUAClientManager::~OPCUAClientManager() {
 
     if (client.isConnected()) {  // if client exist
         client.disconnect();    // disconnect from OPC UA server
+    }
+}
+
+
+constexpr std::string_view toString(opcua::NodeClass nodeClass) {
+    switch (nodeClass) {
+        case opcua::NodeClass::Object:
+            return "Object";
+        case opcua::NodeClass::Variable:
+            return "Variable";
+        case opcua::NodeClass::Method:
+            return "Method";
+        case opcua::NodeClass::ObjectType:
+            return "ObjectType";
+        case opcua::NodeClass::VariableType:
+            return "VariableType";
+        case opcua::NodeClass::ReferenceType:
+            return "ReferenceType";
+        case opcua::NodeClass::DataType:
+            return "DataType";
+        case opcua::NodeClass::View:
+            return "View";
+        default:
+            return "Unknown";
+    }
+}
+
+void printNodeTree(opcua::Node<opcua::Client>& node, int indent) {  // NOLINT
+    for (auto&& child : node.browseChildren()) {
+        std::cout << std::setw(indent) << "- "
+                  << child.readBrowseName().name()  // Node Name
+                  << " (" << toString(child.readNodeClass()) << ") "  // Node Type
+                  << "[NodeId: " << child.id().toString() << "]\n";  // NodeId
     }
 }
 
@@ -39,7 +73,6 @@ bool OPCUAClientManager::connect() {
         ::Logger::getInstance().logInfo("OPCUAClientManager::connect(): No authentication credentials provided, connecting anonymously..."); // log info
     }*/
 
-
     try {  // try to connect to OPC UA server
 
         client.connect(endpointUrl);  // connect to OPC UA server
@@ -54,6 +87,61 @@ bool OPCUAClientManager::connect() {
 
     std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl;
     ::Logger::getInstance().logInfo("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
+
+    /*opcua::Node nodeRoot(client, opcua::ObjectId::RootFolder);
+
+    printNodeTree(nodeRoot, 0);
+
+    auto nodeServer = nodeRoot.browseChild({{0, "Objects"}, {0, "Server"}});
+    // Browse the parent node
+    auto nodeServerParent = nodeServer.browseParent();
+
+    std::cout << nodeServer.readDisplayName().text() << "'s parent node is "
+              << nodeServerParent.readDisplayName().text() << "\n";*/
+
+    try {
+        Node nodeObjects(client, ObjectId::ObjectsFolder);
+        Node nodeServerInterfaces = nodeObjects.browseChild({{3, "ServerInterfaces"}});
+        Node nodeInterface = nodeServerInterfaces.browseChild({{4, "interface"}});
+
+        std::cout << "Data inside 'interface':\n";
+        for (auto&& dataNode : nodeInterface.browseChildren()) {
+            std::cout << "- " << dataNode.readBrowseName().name()
+                      << " (" << toString(dataNode.readNodeClass()) << ") "
+                      << "[NodeId: " << dataNode.id().toString() << "]\n";
+
+            // If it's a variable, try reading the value
+            if (dataNode.readNodeClass() == opcua::NodeClass::Variable) {
+                try {
+                    auto value = dataNode.readValue();
+                    std::cout << "  Data type: " << value.type()->typeName << "\n";
+                    std::cout << "  Value: " << (value.to<bool>() ? "true" : "false") << "\n";
+                    if (value.type()->typeName == "Boolean"){ cout << "Hola" << endl; }
+
+
+
+
+                } catch (const std::exception& e) {
+                    std::cout << "  (Failed to read value: " << e.what() << ")\n";
+                }
+            }
+        }
+
+
+    } catch (const opcua::BadStatus&) {
+        cerr << "Failed to connect to OPC UA server: " << endl;
+    }
+
+
+
+
+    client.run();
+
+
+    client.onSessionClosed([] {cout << "Session closed!" << endl;});
+    client.onDisconnected([] {cout << "Disconnected from OPC UA server!" << endl;});
+
+
 
     return true;
 }
@@ -83,4 +171,7 @@ void OPCUAClientManager::disconnect() {
 }
 
 // get data from OPC UA Server
-bool OPCUAClientManager::getData() {return true;;}
+bool OPCUAClientManager::getData() {
+
+    return true;;
+}

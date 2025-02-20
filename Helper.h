@@ -20,7 +20,7 @@ public:
     ~Helper(); // destructor
 
     string setSQLString(const vector<string>& credentialsSQL); // set sql string from input credentials placed in a vector
-    static std::array<int, 2> Helper::getNodeIdInfo(const string& nodeId);  // from nodeId string get nameSpaceIndex and identifier
+    static std::array<int, 2> getNodeIdInfo(const string& nodeId);  // from nodeId string get nameSpaceIndex and identifier
 
 private:
 

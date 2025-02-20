@@ -44,7 +44,7 @@ private:
     string password;    // password credentials
 
     struct UpdateData {
-        uint32_t nodeId;
+        string nodeId{};
         opcua::DataValue value;
     };
 

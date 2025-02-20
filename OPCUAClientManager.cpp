@@ -14,7 +14,6 @@ OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& 
         workerThread = std::thread(&OPCUAClientManager::processUpdates, this); // start worker thread for processing updates
 }
 
-
 // destructor
 OPCUAClientManager::~OPCUAClientManager() {
 
@@ -33,7 +32,6 @@ OPCUAClientManager::~OPCUAClientManager() {
     }
 
 }
-
 
 constexpr std::string_view toString(const opcua::NodeClass nodeClass) {
     switch (nodeClass) {
@@ -174,56 +172,47 @@ void OPCUAClientManager::disconnect() {
 // get values from OPC UA Server using node Ids
 void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap) {
 
-
     // callback to update monitoredNodes when data changes
-    //auto callback = [&](uint32_t subId, uint32_t monId, const opcua::DataValue& value) {
-    //     for (const auto& [nodeId, info] : nodeIdMap) {
-    //        if (monitoredNodes.find(nodeId) != monitoredNodes.end()) {
-    //            std::get<2>(monitoredNodes[nodeId]) = value; // update DataValue
-    //        }
-    //    }
-    //};
-
-    // callback to update monitoredNodes when data changes
-    auto callback = [&](uint32_t subId, uint32_t monId, const DataValue& value) {
+    auto callback = [&](uint32_t subId, uint32_t monId, const opcua::DataValue& value) {
         std::lock_guard<std::mutex> lock(queueMutex);
-        updateQueue.push({monId, value});
-        queueCV.notify_one(); // notify the worker thread
+
+        // Iterate over the nodeIdMap to find the nodeId and push to the queue
+        for (const auto& [nodeId, info] : nodeIdMap) {
+            // Push the nodeId and value to the queue
+            updateQueue.push({nodeId, value});
+        }
+
+        // Notify the worker thread to process the updates
+        queueCV.notify_one();
     };
 
     client.onSessionActivated([&] {
+        std::cout << "Session Activated\n";
 
-        cout << "Session Activated\n";
-
-
-        // create subscription
-        cout << "Creating subscription...\n";
+        // Create subscription
+        std::cout << "Creating subscription...\n";
         const SubscriptionParameters parameters{};
-        const auto createSubscriptionResponse = createSubscription(
-            client, parameters, true, {}, {}
-        );
-
-        // create subscription ID
+        const auto createSubscriptionResponse = createSubscription(client, parameters, true, {}, {});
         createSubscriptionResponse.responseHeader().serviceResult().throwIfBad();
         const auto subId = createSubscriptionResponse.subscriptionId();
 
-        // prepare the list of nodes to monitor
-        vector<MonitoredItemCreateRequest> monitoredItems;
+        // Prepare nodes for monitoring
+        std::vector<MonitoredItemCreateRequest> monitoredItems;
         for (const auto& [nodeId, info] : nodeIdMap) {
-
-            std::array<int, 2> nodeInfo = Helper::getNodeIdInfo(nodeId);  // get node ID information
-
-            NamespaceIndex nameSpaceIndex = nodeInfo[0];   // get node nameSpaceIndex
-            uint32_t identifier = nodeInfo[1];    // get node identifier
+            std::array<int, 2> nodeInfo = Helper::getNodeIdInfo(nodeId);
+            NamespaceIndex nameSpaceIndex = nodeInfo[0];
+            uint32_t identifier = nodeInfo[1];
 
             MonitoredItemCreateRequest item({{nameSpaceIndex, identifier}, opcua::AttributeId::Value});
             monitoredItems.push_back(item);
+
+            // store the mapping (efficient lookup)
+            monitoredNodes[nodeId] = {get<0>(info), get<1>(info), opcua::DataValue()};
         }
 
         // send subscription request
         const CreateMonitoredItemsRequest request({}, subId, TimestampsToReturn::Both, monitoredItems);
         const auto createMonitoredItemResponse = services::createMonitoredItemsDataChange(client, request, callback, {});
-
         createMonitoredItemResponse.responseHeader().serviceResult().throwIfBad();
     });
 }
@@ -233,20 +222,24 @@ void OPCUAClientManager::processUpdates() {
     while (!stopWorker) {
         std::vector<UpdateData> batchUpdates;
 
+        // Wait for updates in the queue
         {
             std::unique_lock<std::mutex> lock(queueMutex);
             queueCV.wait_for(lock, std::chrono::milliseconds(500), [&] { return !updateQueue.empty(); });
 
+            // Move all updates from the queue to the batch
             while (!updateQueue.empty()) {
                 batchUpdates.push_back(updateQueue.front());
                 updateQueue.pop();
             }
         }
 
+        // Process the updates in the batch
         if (!batchUpdates.empty()) {
             for (const auto& update : batchUpdates) {
+                // Find the nodeId in the monitoredNodes map and update the value
                 if (monitoredNodes.find(update.nodeId) != monitoredNodes.end()) {
-                    std::get<2>(monitoredNodes[update.nodeId]) = update.value;
+                    std::get<2>(monitoredNodes[update.nodeId]) = update.value;  // Update the value
                     std::cout << "Updated Node ID " << update.nodeId << " with new value.\n";
                 }
             }

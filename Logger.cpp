@@ -55,17 +55,22 @@ Logger& Logger::getInstance(const string& filename) {
     return instance;
 }
 
-// log info
-void Logger::logInfo(const string& message) {
-    writeLog("INFO", message); // call helper writelog to insert in file
+void Logger::logInfo(const string& message, const char* file, int line) {
+    stringstream logMsg;
+    logMsg << message << " (File: " << file << ", Line: " << line << ")";
+    writeLog("INFO", logMsg.str()); // call helper writelog to insert in file
 }
 
 // log errors
-void Logger::logError(const string& message) {
-    writeLog("ERROR", message);  // call helper writelog to insert in file
+void Logger::logError(const string& message, const char* file, int line) {
+    stringstream logMsg;
+    logMsg << message << " (File: " << file << ", Line: " << line << ")";
+    writeLog("ERROR", logMsg.str());  // call helper writelog to insert in file
 }
 
 // log debug info
-void Logger::logDebug(const string& message) {
-    writeLog("DEBUG", message);   // call helper writelog to insert in file
+void Logger::logDebug(const string& message, const char* file, int line) {
+    stringstream logMsg;
+    logMsg << message << " (File: " << file << ", Line: " << line << ")";
+    writeLog("DEBUG", logMsg.str());   // call helper writelog to insert in file
 }

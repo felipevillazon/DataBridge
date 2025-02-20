@@ -70,16 +70,16 @@ build CMakeFiles/DataBridge.dir/Logger.cpp.o: CXX_COMPILER__DataBridge_unscanned
   OBJECT_DIR = CMakeFiles/DataBridge.dir
   OBJECT_FILE_DIR = CMakeFiles/DataBridge.dir
 
-build CMakeFiles/DataBridge.dir/ConfigManager.cpp.o: CXX_COMPILER__DataBridge_unscanned_Debug /home/felipevillazon/CLionProjects/DataBridge/ConfigManager.cpp || cmake_object_order_depends_target_DataBridge
+build CMakeFiles/DataBridge.dir/FileManager.cpp.o: CXX_COMPILER__DataBridge_unscanned_Debug /home/felipevillazon/CLionProjects/DataBridge/FileManager.cpp || cmake_object_order_depends_target_DataBridge
   DEFINES = -DUA_ARCHITECTURE_POSIX
-  DEP_FILE = CMakeFiles/DataBridge.dir/ConfigManager.cpp.o.d
+  DEP_FILE = CMakeFiles/DataBridge.dir/FileManager.cpp.o.d
   FLAGS = -g -std=gnu++23 -fdiagnostics-color=always
   OBJECT_DIR = CMakeFiles/DataBridge.dir
   OBJECT_FILE_DIR = CMakeFiles/DataBridge.dir
 
-build CMakeFiles/DataBridge.dir/DataProcessor.cpp.o: CXX_COMPILER__DataBridge_unscanned_Debug /home/felipevillazon/CLionProjects/DataBridge/DataProcessor.cpp || cmake_object_order_depends_target_DataBridge
+build CMakeFiles/DataBridge.dir/Helper.cpp.o: CXX_COMPILER__DataBridge_unscanned_Debug /home/felipevillazon/CLionProjects/DataBridge/Helper.cpp || cmake_object_order_depends_target_DataBridge
   DEFINES = -DUA_ARCHITECTURE_POSIX
-  DEP_FILE = CMakeFiles/DataBridge.dir/DataProcessor.cpp.o.d
+  DEP_FILE = CMakeFiles/DataBridge.dir/Helper.cpp.o.d
   FLAGS = -g -std=gnu++23 -fdiagnostics-color=always
   OBJECT_DIR = CMakeFiles/DataBridge.dir
   OBJECT_FILE_DIR = CMakeFiles/DataBridge.dir
@@ -99,7 +99,7 @@ build CMakeFiles/DataBridge.dir/OPCUAClientManager.cpp.o: CXX_COMPILER__DataBrid
 #############################################
 # Link the executable DataBridge
 
-build DataBridge: CXX_EXECUTABLE_LINKER__DataBridge_Debug CMakeFiles/DataBridge.dir/main.cpp.o CMakeFiles/DataBridge.dir/SQLClientManager.cpp.o CMakeFiles/DataBridge.dir/Logger.cpp.o CMakeFiles/DataBridge.dir/ConfigManager.cpp.o CMakeFiles/DataBridge.dir/DataProcessor.cpp.o CMakeFiles/DataBridge.dir/OPCUAClientManager.cpp.o | /usr/lib/x86_64-linux-gnu/libodbc.so /usr/local/lib/libopen62541pp.a /usr/local/lib/libopen62541.a
+build DataBridge: CXX_EXECUTABLE_LINKER__DataBridge_Debug CMakeFiles/DataBridge.dir/main.cpp.o CMakeFiles/DataBridge.dir/SQLClientManager.cpp.o CMakeFiles/DataBridge.dir/Logger.cpp.o CMakeFiles/DataBridge.dir/FileManager.cpp.o CMakeFiles/DataBridge.dir/Helper.cpp.o CMakeFiles/DataBridge.dir/OPCUAClientManager.cpp.o | /usr/lib/x86_64-linux-gnu/libodbc.so /usr/local/lib/libopen62541pp.a /usr/local/lib/libopen62541.a
   FLAGS = -g
   LINK_LIBRARIES = /usr/lib/x86_64-linux-gnu/libodbc.so  /usr/local/lib/libopen62541pp.a  /usr/local/lib/libopen62541.a  -lm  -lrt
   OBJECT_DIR = CMakeFiles/DataBridge.dir

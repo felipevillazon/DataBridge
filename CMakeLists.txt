@@ -14,10 +14,10 @@ add_executable(DataBridge main.cpp
         SQLClientManager.h
         Logger.cpp
         Logger.h
-        ConfigManager.cpp
-        ConfigManager.h
-        DataProcessor.cpp
-        DataProcessor.h
+        FileManager.cpp
+        FileManager.h
+        Helper.cpp
+        Helper.h
         OPCUAClientManager.cpp
         OPCUAClientManager.h)
 

@@ -10,10 +10,13 @@
 #include <string>
 #include <open62541pp/client.hpp>
 #include <open62541pp/open62541pp.h>
+#include <chrono>
+#include <queue>
 
 
 using namespace std;
 using namespace opcua;
+
 
 class OPCUAClientManager {
 
@@ -23,19 +26,37 @@ public:
 
     bool connect();  // connect to OPC UA Server
     void disconnect();  // disconnect from OPC UA Server
-    bool getData();   // get data from OPC UA Sever
+    void getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap); // get values from OPC UA Sever using nodeIds
+
+    Client client;       // instance UA_Client to create client
+
+    // Stores monitored node values: <nodeId, <objectId, tableName, DataValue>>
+    std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>> monitoredNodes;
+
+    const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& getLatestValues() const {
+        return monitoredNodes; }
+
 
 
 private:
     string endpointUrl; // the endpoint for the client to connect to. Such as "opc.tcp://host:port".
     string username;    // username credentials
     string password;    // password credentials
-    Client client;       // instance UA_Client to create client
 
-    //UA_ClientConfig* config;  // pointer UA_ClientConfig to configure client
+    struct UpdateData {
+        uint32_t nodeId;
+        opcua::DataValue value;
+    };
+
+    std::queue<UpdateData> updateQueue;
+    std::mutex queueMutex;
+    std::condition_variable queueCV;
+    std::thread workerThread;
+    bool stopWorker;
+
+    void processUpdates();
+
 
 };
-
-
 
 #endif //OPCUACLIENTMANAGER_H

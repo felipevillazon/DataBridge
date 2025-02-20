@@ -5,25 +5,37 @@
 #include "OPCUAClientManager.h"
 #include "Logger.h"
 #include <open62541pp/node.hpp>
+#include "Helper.h"
 
 // constructor
 OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& username, const string& password)
-    : endpointUrl(endpointUrl), username(username), password(password) {}
+    : endpointUrl(endpointUrl), username(username), password(password), stopWorker(false) {
+
+        workerThread = std::thread(&OPCUAClientManager::processUpdates, this); // start worker thread for processing updates
+}
+
 
 // destructor
 OPCUAClientManager::~OPCUAClientManager() {
 
     // The destructor of the class will disconnect the client from the OPC UA server if called
 
-    ::Logger::getInstance().logInfo("OPCUAClientManager: Disconnecting from OPC UA server by using destructor of the class."); // log info
+    stopWorker = true;
+    queueCV.notify_all();
+    if (workerThread.joinable()) {
+        workerThread.join();
+    }
+
+    ::LOG_INFO("OPCUAClientManager: Disconnecting from OPC UA server by using destructor of the class."); // log info
 
     if (client.isConnected()) {  // if client exist
         client.disconnect();    // disconnect from OPC UA server
     }
+
 }
 
 
-constexpr std::string_view toString(opcua::NodeClass nodeClass) {
+constexpr std::string_view toString(const opcua::NodeClass nodeClass) {
     switch (nodeClass) {
         case opcua::NodeClass::Object:
             return "Object";
@@ -57,11 +69,11 @@ void printNodeTree(opcua::Node<opcua::Client>& node, int indent) {  // NOLINT
 
 // connect to OPC UA Server
 bool OPCUAClientManager::connect() {
-    ::Logger::getInstance().logInfo("OPCUAClientManager::connect(): Connecting to OPC UA server...");
+    ::LOG_INFO("OPCUAClientManager::connect(): Connecting to OPC UA server...");
 
     if (client.isConnected()) {  // check if already connected
         std::cerr << "Client is already connected!" << std::endl;
-        ::Logger::getInstance().logInfo("OPCUAClientManager::connect(): Client already connected.");  // log info
+        ::LOG_INFO("OPCUAClientManager::connect(): Client already connected.");  // log info
         return true;  // already connected, return success
     }
 
@@ -80,13 +92,13 @@ bool OPCUAClientManager::connect() {
     } catch (const opcua::BadStatus&) {  // catch error if connection failed
 
         cerr << "Failed to connect to OPC UA server: " << endl;
-        ::Logger::getInstance().logError("OPCUAClientManager::connect(): Failed to connect to OPC UA server."); // log error
+        ::LOG_ERROR("OPCUAClientManager::connect(): Failed to connect to OPC UA server."); // log error
         return false;
 
     }
 
     std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl;
-    ::Logger::getInstance().logInfo("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
+    ::LOG_INFO("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
 
     /*opcua::Node nodeRoot(client, opcua::ObjectId::RootFolder);
 
@@ -118,41 +130,30 @@ bool OPCUAClientManager::connect() {
                     std::cout << "  Value: " << (value.to<bool>() ? "true" : "false") << "\n";
                     if (value.type()->typeName == "Boolean"){ cout << "Hola" << endl; }
 
-
-
-
                 } catch (const std::exception& e) {
                     std::cout << "  (Failed to read value: " << e.what() << ")\n";
                 }
             }
         }
 
-
     } catch (const opcua::BadStatus&) {
         cerr << "Failed to connect to OPC UA server: " << endl;
     }
 
-
-
-
     client.run();
-
 
     client.onSessionClosed([] {cout << "Session closed!" << endl;});
     client.onDisconnected([] {cout << "Disconnected from OPC UA server!" << endl;});
 
-
-
     return true;
 }
-
 
 // disconnect from OPC UA Server
 void OPCUAClientManager::disconnect() {
 
     // Disconnect deals with the disconnection from the OPC UA server
 
-    ::Logger::getInstance().logInfo("OPCUAClientManager::disconnect(): Disconnecting from OPC UA server..."); // log info
+    ::LOG_INFO("OPCUAClientManager::disconnect(): Disconnecting from OPC UA server..."); // log info
 
     client.disconnect();  // disconnect from opc ua server
 
@@ -160,18 +161,95 @@ void OPCUAClientManager::disconnect() {
     if (!client.isConnected()) {  // if disconnection sucessfully
 
         std::cout << "OPC UA client successfully disconnected." << std::endl; // return positive message
-        ::Logger::getInstance().logInfo("OPCUAClientManager::disconnect(): Disconnection from OPC UA server successfully."); // log info
+        ::LOG_INFO("OPCUAClientManager::disconnect(): Disconnection from OPC UA server successfully."); // log info
 
     } else {  // if disconnection failed
 
-        ::Logger::getInstance().logError("OPCUAClientManager::disconnect(): Disconnection from OPC UA server failed."); // log error
+        ::LOG_ERROR("OPCUAClientManager::disconnect(): Disconnection from OPC UA server failed."); // log error
         std::cerr << "OPC UA client disconnection failed!" << std::endl;  // return negative message
     }
 
 }
 
-// get data from OPC UA Server
-bool OPCUAClientManager::getData() {
+// get values from OPC UA Server using node Ids
+void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap) {
 
-    return true;;
+
+    // callback to update monitoredNodes when data changes
+    //auto callback = [&](uint32_t subId, uint32_t monId, const opcua::DataValue& value) {
+    //     for (const auto& [nodeId, info] : nodeIdMap) {
+    //        if (monitoredNodes.find(nodeId) != monitoredNodes.end()) {
+    //            std::get<2>(monitoredNodes[nodeId]) = value; // update DataValue
+    //        }
+    //    }
+    //};
+
+    // callback to update monitoredNodes when data changes
+    auto callback = [&](uint32_t subId, uint32_t monId, const DataValue& value) {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        updateQueue.push({monId, value});
+        queueCV.notify_one(); // notify the worker thread
+    };
+
+    client.onSessionActivated([&] {
+
+        cout << "Session Activated\n";
+
+
+        // create subscription
+        cout << "Creating subscription...\n";
+        const SubscriptionParameters parameters{};
+        const auto createSubscriptionResponse = createSubscription(
+            client, parameters, true, {}, {}
+        );
+
+        // create subscription ID
+        createSubscriptionResponse.responseHeader().serviceResult().throwIfBad();
+        const auto subId = createSubscriptionResponse.subscriptionId();
+
+        // prepare the list of nodes to monitor
+        vector<MonitoredItemCreateRequest> monitoredItems;
+        for (const auto& [nodeId, info] : nodeIdMap) {
+
+            std::array<int, 2> nodeInfo = Helper::getNodeIdInfo(nodeId);  // get node ID information
+
+            NamespaceIndex nameSpaceIndex = nodeInfo[0];   // get node nameSpaceIndex
+            uint32_t identifier = nodeInfo[1];    // get node identifier
+
+            MonitoredItemCreateRequest item({{nameSpaceIndex, identifier}, opcua::AttributeId::Value});
+            monitoredItems.push_back(item);
+        }
+
+        // send subscription request
+        const CreateMonitoredItemsRequest request({}, subId, TimestampsToReturn::Both, monitoredItems);
+        const auto createMonitoredItemResponse = services::createMonitoredItemsDataChange(client, request, callback, {});
+
+        createMonitoredItemResponse.responseHeader().serviceResult().throwIfBad();
+    });
+}
+
+// **worker thread processes updates in batches**
+void OPCUAClientManager::processUpdates() {
+    while (!stopWorker) {
+        std::vector<UpdateData> batchUpdates;
+
+        {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            queueCV.wait_for(lock, std::chrono::milliseconds(500), [&] { return !updateQueue.empty(); });
+
+            while (!updateQueue.empty()) {
+                batchUpdates.push_back(updateQueue.front());
+                updateQueue.pop();
+            }
+        }
+
+        if (!batchUpdates.empty()) {
+            for (const auto& update : batchUpdates) {
+                if (monitoredNodes.find(update.nodeId) != monitoredNodes.end()) {
+                    std::get<2>(monitoredNodes[update.nodeId]) = update.value;
+                    std::cout << "Updated Node ID " << update.nodeId << " with new value.\n";
+                }
+            }
+        }
+    }
 }

@@ -23,9 +23,9 @@ public:
 
     static Logger& getInstance(const string& filename = "default.log");  // method that returns a reference to an instance of the class (Singleton)
 
-    void logInfo(const string& message); // log important general messages
-    void logError(const string& message); // log error messages
-    void logDebug(const string& message);  // log debug messages
+    void logInfo(const string& message, const char* file, int line); // log important general messages
+    void logError(const string& message, const char* file, int line); // log error messages
+    void logDebug(const string& message, const char* file, int line);  // log debug messages
 
 private:
     explicit Logger(const string& filename); // constructor private!
@@ -45,6 +45,9 @@ private:
 };
 
 
-
+// Macros to simplify logging calls
+#define LOG_INFO(message) Logger::getInstance().logInfo(message, __FILE__, __LINE__)
+#define LOG_ERROR(message) Logger::getInstance().logError(message, __FILE__, __LINE__)
+#define LOG_DEBUG(message) Logger::getInstance().logDebug(message, __FILE__, __LINE__)
 
 #endif //LOGGER_H

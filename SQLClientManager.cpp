@@ -151,7 +151,7 @@ bool SQLClientManager::executeQuery(const string& query) {
 }
 
 // create SQL database tables from external file
-void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
+ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
 
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting to build SQL database schema...");  // log info
     FileManager fileManager;
@@ -252,12 +252,129 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
     }
 }
 
-// insert data by input table name, object id and value from opc ua node id
-void SQLClientManager::insertBatchData(const string &table, const pmr::unordered_map<int, float> &data) {
+// prepare insert statements for SQL query
+void SQLClientManager::prepareInsertStatements(const std::unordered_map<std::string, std::vector<std::pair<int, float>>>& tableObjects) {
 
+    LOG_INFO("SQLClientManager::prepareInsertStatements(): Preparing insert statements...");  // log info
+
+    for (const auto& [tableName, records] : tableObjects) {
+        // Generate the INSERT INTO query for each table
+        std::ostringstream queryStream;
+        queryStream << "INSERT INTO " << tableName << " (data1, data2) VALUES (?, ?)";
+        std::string query = queryStream.str();
+
+        std::cout << "Prepared query for table '" << tableName << "': " << query << std::endl;
+
+        // Allocate statement handle
+        SQLHSTMT stmt;
+        SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt);
+
+        // Prepare the SQL statement
+        if (SQLPrepare(stmt, (SQLCHAR*)query.c_str(), SQL_NTS) != SQL_SUCCESS) {
+            std::cerr << "Failed to prepare statement for table: " << tableName << std::endl;
+            LOG_ERROR("SQLClientManager::prepareInsertStatements(): Preparing insert statements failed.");  // log error
+            continue;
+        }
+
+        // Store prepared statement
+        preparedStatements[tableName] = stmt;
+
+        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepare insert statement successfully.");  // log info
+        std::cout << "Successfully prepared statement for table: " << tableName << std::endl;
+    }
+}
+
+// insert data by input table name, object id and value from opc ua node id
+bool SQLClientManager::insertBatchData(std::unordered_map<std::string, std::vector<std::pair<int, float>>>& tableObjects) {
+
+    LOG_INFO("SQLClientManager::insertBatchData(): Inserting batch data...");  // log info
+    try {
+        // start transaction with BEGIN TRANSACTION
+        LOG_INFO("SQLClientManager::insertBatchData(): Begin transaction.");  // log info
+
+        if (const std::string beginTransaction = "BEGIN TRANSACTION;"; !executeQuery(beginTransaction)) {
+
+            LOG_ERROR("SQLClientManager::insertBatchData(): Failed to begin transaction.");  // log error
+            std::cerr << "Failed to start transaction" << std::endl;
+            return false;
+        }
+
+        // iterate through each table and its records in tableObjects
+
+        LOG_INFO("SQLClientManager::insertBatchData(): Prepare statements.");
+        for (const auto& [tableName, records] : tableObjects) {
+            // retrieve the prepared statement for the table
+            auto stmt = preparedStatements.find(tableName);
+            if (stmt == preparedStatements.end()) {
+
+                LOG_ERROR("SQLClientManager::insertBatchData(): Prepared statement not found");  // log error
+
+                std::cerr << "Prepared statement not found for table: " << tableName << std::endl;
+                continue; // skip to next table if the statement is not found
+            }
+
+            // get the prepared statement
+            const SQLHSTMT preparedStmt = stmt->second;
+
+            // prepare the arrays for batch binding
+            SQLINTEGER data1Ind[records.size()];
+            SQLREAL data2Ind[records.size()];
+
+            // fill the data arrays for the batch
+            for (size_t i = 0; i < records.size(); ++i) {
+                data1Ind[i] = records[i].first;
+                data2Ind[i] = records[i].second;
+            }
+
+            // bind the data arrays to the prepared statement (array binding)
+            SQLRETURN ret = SQLBindParameter(preparedStmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, data1Ind, 0, nullptr);
+            if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+
+                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind parameters.");  // log error
+                std::cerr << "Failed to bind data1 for table: " << tableName << std::endl;
+                continue;
+            }
+
+            ret = SQLBindParameter(preparedStmt, 2, SQL_PARAM_INPUT, SQL_C_FLOAT, SQL_REAL, 0, 0, data2Ind, 0, nullptr);
+            if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+
+                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind data.");  // log error
+                std::cerr << "Failed to bind data2 for table: " << tableName << std::endl;
+                continue;
+            }
+
+            // execute the batch insert (inserting all rows at once)
+            ret = SQLExecute(preparedStmt);
+            if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+
+                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to execute statement.");  // log error
+                std::cerr << "SQLExecute failed for table: " << tableName << std::endl;
+                continue;
+            }
+
+            // reset statement handle for next iteration (if needed)
+            // SQLFreeStmt(preparedStmt, SQL_CLOSE); // Not necessary since we're reusing the same prepared statement
+        }
+
+        // commit transaction with COMMIT
+        if (const std::string commitTransaction = "COMMIT;"; !executeQuery(commitTransaction)) {
+
+            LOG_ERROR("SQLClientManager::insertBatchData(): Failed to commit transaction."); // log error
+            std::cerr << "Failed to commit transaction" << std::endl;
+            throw std::runtime_error("COMMIT failed");
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        // rollback transaction in case of error with ROLLBACK
+        const std::string rollbackTransaction = "ROLLBACK;";
+        executeQuery(rollbackTransaction);
+
+        LOG_ERROR("SQLClientManager::insertBatchData(): Failed to rollback transaction."); // log error
+        std::cerr << "Transaction failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 // insert alarm data into Alarm table
-void SQLClientManager::insertAlarm(const string &table, const string &alarm) {
-
-}
+//void SQLClientManager::insertAlarm(const string &table, const string &alarm) {}

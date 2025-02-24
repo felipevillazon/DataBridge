@@ -26,9 +26,10 @@ public:
     bool connect();   // connect to database
     void disconnect(); // disconnect from database
     void createDatabaseSchema(const string& schemaFile); // create database tables from file with JSON format
-    void insertBatchData(const string& table, const pmr::unordered_map<int, float>& data);  // insert data using table, object id and value
-    void insertAlarm(const string& table, const string& alarm);  // insert alarm into table Alarms
+    //void insertAlarm(const string& table, const string& alarm);  // insert alarm into table Alarms
     bool executeQuery(const string& query); // execute query from by using prestatement
+    void prepareInsertStatements(const std::unordered_map<std::string, std::vector<std::pair<int, float>>>& tableObjects);
+    bool insertBatchData(std::unordered_map<std::string, std::vector<std::pair<int, float>>>& tableObjects);
 
 private:
     SQLHANDLE sqlEnvHandle; // environment handle
@@ -38,6 +39,7 @@ private:
     SQLHSTMT hStmt{}; // statement handle
     string connectionString; // connection string
     SQLCHAR errMsg[1000]{};  // message string
+    std::unordered_map<std::string, SQLHSTMT> preparedStatements; // store prepared statements
 };
 
 

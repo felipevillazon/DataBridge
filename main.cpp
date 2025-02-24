@@ -6,64 +6,102 @@
 #include "Helper.h"
 
 // initialize application
-void initialize() {}
+void initialize() {
 
-// run application
-void run(){};
+    // we use initialize to start connection between server and clients. We also may use it to load files.
+     try {
+         // log into Log file
+         const string logFile = "/home/felipevillazon/Xelips/application.log";  // path to Log File
+         ::Logger &Logger = ::Logger::getInstance(logFile);  // Logger instance
 
-// stop application
-void shutdown(){};
+
+         // manage login credentials
+         FileManager file_manager;  // create instance of ConfigManager
+         const string credentialFile = "/home/felipevillazon/Xelips/credentials.JSON";  // path to credential file
+         file_manager.loadFile(credentialFile);   // open credential file
+         const vector<string> sql_credentials = file_manager.getSQLConnectionDetails();  // get vector with sql credentials (DO NOT DISPLAY!)
+         const vector<string> opcua_credentials = file_manager.getOPCUAServerDetails();  // get vector with opc ua credentials (DO NOT DISPLAY!)
+         Helper helper; // create instance of Helper
+         const string sql_string = helper.setSQLString(sql_credentials);  // create sql string for SQL connection (DO NOT DISPLAY!)
+
+
+         // try connection to SQL server
+         SQLClientManager sql_client_manager(sql_string);  // create instance of SQLClientManager
+         while (!sql_client_manager.connect()) {  // if not connected to SQL server
+             try {
+                 sql_client_manager.connect();   // try connection to sql database
+             } catch (const exception &e){
+                 sql_client_manager.disconnect(); // disconnect from SQL server
+                 std::cout << "Disconnected. Retry to connect in 1 seconds\n";  // try to connect again
+                 std::this_thread::sleep_for(std::chrono::seconds(1)); // wait n seconds for retry connection
+             }
+         }
+
+
+         // try connection to OPCUA server
+         OPCUAClientManager opcua_client_manager(opcua_credentials.at(0), opcua_credentials.at(1), opcua_credentials.at(2)); // create instance of OPCUAClientManager and input OPC UA credentials
+         while (!opcua_client_manager.connect()) {  // if not connected to OPCUA server
+             try {
+                 opcua_client_manager.connect();   // try connection to OPCUA server
+                 opcua_client_manager.client.run();
+             } catch (const BadStatus&){
+                 opcua_client_manager.disconnect(); // disconnect from OPCUA server
+                 std::cout << "Disconnected. Retry to connect in 1 seconds\n";  // try to connect again
+                 std::this_thread::sleep_for(std::chrono::seconds(1)); // wait n seconds for retry connection
+             }
+         }
+
+
+         // build up SQL database if not done yet
+         const string databaseSchemeFile = "/home/felipevillazon/Xelips/dbSchema.JSON";  // path to SQL database scheme
+         sql_client_manager.createDatabaseSchema(databaseSchemeFile);  // create SQL database scheme
+
+
+         // space for inserting static data into static table in SQL database
+         // missing insert of static data, needs to prepare files with official data
+         //
+         //
+         //
+
+
+         // map nodeID to objectID and table name
+         const string staticInformationFile = "/home/felipevillazon/test.JSON";  // path to file containing static information
+         file_manager.loadFile(staticInformationFile);  // load file
+         unordered_map<std::string, std::tuple<int, std::string>> mappedData = file_manager.mapNodeIdToObjectId();
+
+         constexpr int intervalInSeconds = 1;
+         const std::chrono::seconds interval(intervalInSeconds);
+
+         while (true) {
+
+
+             // retrieve from OPC UA server
+             opcua_client_manager.getValueFromNodeId(mappedData); // get DataValue from nodeIds
+
+
+             // prepared monitored data from SQL insertion
+             opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes); // structure data in map object with table_name as key
+
+
+             // execute SQL query
+             sql_client_manager.insertBatchData(opcua_client_manager.tableObjects); // batch insert into SQL database
+
+
+             // Wait for the next interval
+             std::this_thread::sleep_for(interval);
+         }
+
+     } catch (const exception &e) {
+
+         std::cerr << "Error during initialization: " << e.what() << std::endl;
+         std::exit(EXIT_FAILURE);  // Terminate the program if initialization fails
+     }
+}
+
 
 int main() {
 
-
-    ::Logger &Logger = ::Logger::getInstance("/home/felipevillazon/Xelips/application.log");
-
-    // testing configManager for credential file
-    FileManager config_manager_credentials;  // create instance of ConfigManager
-    config_manager_credentials.loadFile("/home/felipevillazon/Xelips/credentials.JSON");   // open credential file
-    const vector<string> sql_credentials = config_manager_credentials.getSQLConnectionDetails();  // get vector with sql credentials (DO NOT DISPLAY!)
-    const vector<string> opcua_credentials = config_manager_credentials.getOPCUAServerDetails();  // get vector with opc ua credentials (DO NOT DISPLAY!)
-
-    // testing DataProcessor
-    Helper data_processor; // create instance of DataProcessor
-    const string sql_string = data_processor.setSQLString(sql_credentials);  // create sql string (DO NOT DISPLAY!)
-
-    // testing SQL connection
-    SQLClientManager sql_client_manager(sql_string);  // create instance of SQLClientManager
-    sql_client_manager.connect();   // try connection to sql database
-
-
-    // testing creation of database structure (tables) from JSON file
-    //sql_client_manager.createDatabaseSchema("/home/felipevillazon/Xelips/dbSchema.JSON");  // create database schema
-
-
-    // testing batch method for nodeIds
-    config_manager_credentials.loadFile("/home/felipevillazon/test.JSON");
-    unordered_map<string, int> nodeID = config_manager_credentials.mapNodeIdToObjectId();
-
-    //for (const auto& [nodeId, paramId] : nodeID) {
-    //    cout << "NodeId: " << nodeId << " -> ParameterId: " << paramId << endl;
-    //}
-
-    // testing OPC UA connection
-    OPCUAClientManager opcua_client_manager(opcua_credentials.at(0), opcua_credentials.at(1), opcua_credentials.at(2)); // create instance of OPCUAClientManager and input OPC UA credentials
-    opcua_client_manager.connect();
-
+    initialize();
 
     return 0;
-
-    /*// endless loop to automatically (try to) reconnect to server.
-    while (true) {
-        try {
-            client.connect(endpointUrl);
-            // Run the client's main loop to process callbacks and events.
-            // This will block until client.stop() is called or an exception is thrown.
-            client.run();
-        } catch (const opcua::BadStatus&) {
-            client.disconnect();
-            std::cout << "Disconnected. Retry to connect in 3 seconds\n";
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-        }
-    }*/
 }

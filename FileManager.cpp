@@ -155,15 +155,15 @@ vector<string> FileManager::getSQLConnectionDetails() {
     return credentialsSQL; // return vector
 }
 
-// map node id to sensor id and table name
-unordered_map<string, int> FileManager::mapNodeIdToObjectId() {
+// map node_id to object_id and table_name
+std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNodeIdToObjectId() {
 
-  LOG_INFO("FileManager::mapNodeIdToObjectId(): Starting mapping between nodeId and parameterId...");  // log info
+  LOG_INFO("FileManager::mapNodeIdToObjectId(): Starting mapping between nodeId, objectId, and tableName...");  // log info
 
-  unordered_map<string, int> nodeIdMap;  // unordered_map to return nodeId batch
-  vector<pair<string, int>> batchData;   // batch container
+  std::unordered_map<std::string, std::tuple<int, std::string>> nodeIdMap;  // Map to store results
+  std::vector<std::pair<std::string, std::tuple<int, std::string>>> batchData;  // Temporary batch container
 
-  // iterate dynamically through the JSON structure
+  // Iterate dynamically through the JSON structure
   for (const auto& [_, category] : configData.items()) {
     if (!category.is_object()) continue;
 
@@ -172,28 +172,32 @@ unordered_map<string, int> FileManager::mapNodeIdToObjectId() {
 
       const auto& columns = entry["columns"];
       int primaryId = -1;
-      string nodeId;
+      std::string nodeId;
+      std::string tableName;
 
-      // extract the first integer field as primaryId and find "node_id"
+      // Extract primaryId (first integer found), nodeId, and tableName
       for (auto it = columns.begin(); it != columns.end(); ++it) {
         if (it.value().is_number_integer() && primaryId == -1) {
           primaryId = it.value().get<int>();  // First integer field is used as primaryId
         }
         if (it.key() == "node_id" && it.value().is_string()) {
-          nodeId = it.value().get<string>();
+          nodeId = it.value().get<std::string>();
+        }
+        if (it.key() == "table_name" && it.value().is_string()) {
+          tableName = it.value().get<std::string>();
         }
       }
 
-      // only store valid entries
-      if (!nodeId.empty() && primaryId != -1) {
-        batchData.emplace_back(nodeId, primaryId);
+      // Only store valid entries
+      if (!nodeId.empty() && primaryId != -1 && !tableName.empty()) {
+        batchData.emplace_back(nodeId, std::make_tuple(primaryId, tableName));
       }
     }
   }
 
-  // bulk insert into unordered_map
+  // Bulk insert into unordered_map
   nodeIdMap.insert(batchData.begin(), batchData.end());
 
   return nodeIdMap;
-
 }
+

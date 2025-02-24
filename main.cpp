@@ -51,39 +51,6 @@ int main() {
     opcua_client_manager.connect();
 
 
-    // Map of nodes <nodeId, <objectId, tableName>>
-    std::unordered_map<std::string, std::tuple<int, std::string>> nodeIdMap = {
-        {"ns=4;i=3", {101, "temperature_table"}},
-        {"ns=2;i=1001", {202, "pressure_table"}},
-        {"ns=3;i=25", {303, "flow_table"}}
-    };
-
-    // Start monitoring nodes
-    opcua_client_manager.getValueFromNodeId(nodeIdMap);
-
-    // Periodically check values
-    while (true) {
-        const auto& updatedValues = opcua_client_manager.getLatestValues();  // No copy, just a reference
-
-        for (const auto& [nodeId, info] : updatedValues) {
-            int objectId;
-            std::string tableName;
-            opcua::DataValue value;
-            std::tie(objectId, tableName, value) = info;
-
-            std::cout << "Latest Value for Node " << nodeId << ": " << value.value().to<string>()
-                      << " (Object ID: " << objectId << ", Table: " << tableName << ")\n";
-        }
-
-        std::this_thread::sleep_for(std::chrono::seconds(1));  // Wait for 1 second
-    }
-
-    // Disconnect when done
-    opcua_client_manager.disconnect();
-
-
-
-
     return 0;
 
     /*// endless loop to automatically (try to) reconnect to server.
@@ -100,8 +67,3 @@ int main() {
         }
     }*/
 }
-
-// TIP See CLion help at <a
-// href="https://www.jetbrains.com/help/clion/">jetbrains.com/help/clion/</a>.
-//  Also, you can try interactive lessons for CLion by selecting
-//  'Help | Learn IDE Features' from the main menu.

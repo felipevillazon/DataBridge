@@ -10,8 +10,7 @@
 // constructor
 OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& username, const string& password)
     : endpointUrl(endpointUrl), username(username), password(password), stopWorker(false) {
-
-        workerThread = std::thread(&OPCUAClientManager::processUpdates, this); // start worker thread for processing updates
+    workerThread = std::thread(&OPCUAClientManager::processUpdates, this); // start worker thread for processing updates
 }
 
 // destructor
@@ -31,38 +30,6 @@ OPCUAClientManager::~OPCUAClientManager() {
         client.disconnect();    // disconnect from OPC UA server
     }
 
-}
-
-constexpr std::string_view toString(const opcua::NodeClass nodeClass) {
-    switch (nodeClass) {
-        case opcua::NodeClass::Object:
-            return "Object";
-        case opcua::NodeClass::Variable:
-            return "Variable";
-        case opcua::NodeClass::Method:
-            return "Method";
-        case opcua::NodeClass::ObjectType:
-            return "ObjectType";
-        case opcua::NodeClass::VariableType:
-            return "VariableType";
-        case opcua::NodeClass::ReferenceType:
-            return "ReferenceType";
-        case opcua::NodeClass::DataType:
-            return "DataType";
-        case opcua::NodeClass::View:
-            return "View";
-        default:
-            return "Unknown";
-    }
-}
-
-void printNodeTree(opcua::Node<opcua::Client>& node, int indent) {  // NOLINT
-    for (auto&& child : node.browseChildren()) {
-        std::cout << std::setw(indent) << "- "
-                  << child.readBrowseName().name()  // Node Name
-                  << " (" << toString(child.readNodeClass()) << ") "  // Node Type
-                  << "[NodeId: " << child.id().toString() << "]\n";  // NodeId
-    }
 }
 
 // connect to OPC UA Server
@@ -98,51 +65,6 @@ bool OPCUAClientManager::connect() {
     std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl;
     ::LOG_INFO("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
 
-    /*opcua::Node nodeRoot(client, opcua::ObjectId::RootFolder);
-
-    printNodeTree(nodeRoot, 0);
-
-    auto nodeServer = nodeRoot.browseChild({{0, "Objects"}, {0, "Server"}});
-    // Browse the parent node
-    auto nodeServerParent = nodeServer.browseParent();
-
-    std::cout << nodeServer.readDisplayName().text() << "'s parent node is "
-              << nodeServerParent.readDisplayName().text() << "\n";*/
-
-    try {
-        Node nodeObjects(client, ObjectId::ObjectsFolder);
-        Node nodeServerInterfaces = nodeObjects.browseChild({{3, "ServerInterfaces"}});
-        Node nodeInterface = nodeServerInterfaces.browseChild({{4, "interface"}});
-
-        std::cout << "Data inside 'interface':\n";
-        for (auto&& dataNode : nodeInterface.browseChildren()) {
-            std::cout << "- " << dataNode.readBrowseName().name()
-                      << " (" << toString(dataNode.readNodeClass()) << ") "
-                      << "[NodeId: " << dataNode.id().toString() << "]\n";
-
-            // If it's a variable, try reading the value
-            if (dataNode.readNodeClass() == opcua::NodeClass::Variable) {
-                try {
-                    auto value = dataNode.readValue();
-                    std::cout << "  Data type: " << value.type()->typeName << "\n";
-                    std::cout << "  Value: " << (value.to<bool>() ? "true" : "false") << "\n";
-                    if (value.type()->typeName == "Boolean"){ cout << "Hola" << endl; }
-
-                } catch (const std::exception& e) {
-                    std::cout << "  (Failed to read value: " << e.what() << ")\n";
-                }
-            }
-        }
-
-    } catch (const opcua::BadStatus&) {
-        cerr << "Failed to connect to OPC UA server: " << endl;
-    }
-
-    client.run();
-
-    client.onSessionClosed([] {cout << "Session closed!" << endl;});
-    client.onDisconnected([] {cout << "Disconnected from OPC UA server!" << endl;});
-
     return true;
 }
 
@@ -172,24 +94,31 @@ void OPCUAClientManager::disconnect() {
 // get values from OPC UA Server using node Ids
 void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap) {
 
+    ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Starting getting values from nodeIds..."); // log info
+
     // callback to update monitoredNodes when data changes
     auto callback = [&](uint32_t subId, uint32_t monId, const opcua::DataValue& value) {
         std::lock_guard<std::mutex> lock(queueMutex);
 
-        // Iterate over the nodeIdMap to find the nodeId and push to the queue
+        // iterate over the nodeIdMap to find the nodeId and push to the queue
         for (const auto& [nodeId, info] : nodeIdMap) {
-            // Push the nodeId and value to the queue
+            // push the nodeId and value to the queue
             updateQueue.push({nodeId, value});
         }
 
-        // Notify the worker thread to process the updates
+        // notify the worker thread to process the updates
         queueCV.notify_one();
     };
 
+    ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Checking if OPC UA session activated..."); // log info
+
     client.onSessionActivated([&] {
+
+        ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): OPC UA session activated."); // log info
         std::cout << "Session Activated\n";
 
-        // Create subscription
+        // create subscription
+        ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Creating OPC UA subscriptions to node IDs"); // log info
         std::cout << "Creating subscription...\n";
         const SubscriptionParameters parameters{};
         const auto createSubscriptionResponse = createSubscription(client, parameters, true, {}, {});
@@ -244,5 +173,48 @@ void OPCUAClientManager::processUpdates() {
                 }
             }
         }
+    }
+}
+
+// convert DataValue to float
+float extractFloatValue(const opcua::DataValue& dataValue) {
+
+    ::LOG_INFO("OPCUAClientManager::extractFloatValue(): Converting to float data type..."); // log info
+
+    if (!dataValue.hasValue()) {
+
+        ::LOG_INFO("OPCUAClientManager::extractFloatValue(): Value not found."); // log info
+        return 0.0f;  // Default to 0.0 if the value is not present
+    }
+
+    if (const opcua::Variant& variant = dataValue.value(); variant.isType<int>()) {
+        return static_cast<float>(variant.to<int>());
+    } else if (variant.isType<double>()) {
+        return static_cast<float>(variant.to<double>());
+    } else if (variant.isType<float>()) {
+        return variant.to<float>();  // Already a float
+    } else if (variant.isType<bool>()) {
+        return variant.to<bool>() ? 1.0f : 0.0f;  // Convert bool to float (true → 1.0, false → 0.0)
+    }
+
+    return 0.0f;  // Default return if type is unsupported
+}
+
+// group data by table name to insert into DataBase
+void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes)
+{
+    ::LOG_INFO("OPCUAClientManager::groupByTableName(): Grouping data by table name..."); // log info
+
+    for (const auto& [nodeId, data] : monitoredNodes) {
+
+        int objectId = std::get<0>(data);    // extract objectId
+
+        std::string tableName = std::get<1>(data);  // extract tableName
+
+        opcua::DataValue dataValue = std::get<2>(data);  // extract DataValue
+
+        float value = extractFloatValue(dataValue); // convert DataValue to float
+
+        tableObjects[tableName].emplace_back(objectId, value); // store (objectId, float value)
     }
 }

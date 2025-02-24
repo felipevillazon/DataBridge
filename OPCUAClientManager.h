@@ -21,27 +21,48 @@ using namespace opcua;
 class OPCUAClientManager {
 
 public:
-    explicit OPCUAClientManager(const string& endpointUrl, const string& username = "", const string& password = "");  // constructor
-    ~OPCUAClientManager(); // destructor
 
-    bool connect();  // connect to OPC UA Server
-    void disconnect();  // disconnect from OPC UA Server
-    void getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap); // get values from OPC UA Sever using nodeIds
+    // constructor
+    explicit OPCUAClientManager(const string& endpointUrl, const string& username = "", const string& password = "");
 
-    Client client;       // instance UA_Client to create client
+    // destructor
+    ~OPCUAClientManager();
 
-    // Stores monitored node values: <nodeId, <objectId, tableName, DataValue>>
+    // connect to OPC UA Server
+    bool connect();
+
+    // disconnect from OPC UA Server
+    void disconnect();
+
+    // get values from OPC UA Sever using nodeIds
+    void getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap);
+
+    // group values and objects ids by table names, also convert DataValue to float to match SQL datatype
+    void groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes);
+
+    // instance UA_Client to create client
+    Client client;
+
+    // stores monitored node values: <nodeId, <objectId, tableName, DataValue>>
     std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>> monitoredNodes;
 
-    const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& getLatestValues() const {
-        return monitoredNodes; }
+    // stores monitored data and group by table name <tableName, <objectId, value [[float type only]]>>
+    std::unordered_map<std::string, std::vector<std::pair<int, float>>> tableObjects;
+
+
 
 
 
 private:
-    string endpointUrl; // the endpoint for the client to connect to. Such as "opc.tcp://host:port".
-    string username;    // username credentials
-    string password;    // password credentials
+
+    // the endpoint for the client to connect to. Such as "opc.tcp://host:port".
+    string endpointUrl;
+
+    // username credentials
+    string username;
+
+    // password credentials
+    string password;
 
     struct UpdateData {
         string nodeId{};

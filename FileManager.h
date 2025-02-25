@@ -26,7 +26,7 @@ public:
     void loadFile(const string& filename); //  load JSON file
     vector<string> getOPCUAServerDetails(); // retrieve OPC Server login data
     vector<string> getSQLConnectionDetails(); // retrieve SQL database login data
-    unordered_map<std::string, std::tuple<int, std::string>> mapNodeIdToObjectId();  // map node id to sensor id and table name
+        unordered_map<std::string, std::tuple<int, std::string>> mapNodeIdToObjectId();  // map node id to sensor id and table name
 
     string filename;  // path to the location of the credential file
     ordered_json configData;  // store json file content

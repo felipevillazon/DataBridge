@@ -54,6 +54,8 @@ bool OPCUAClientManager::connect() {
 
         client.connect(endpointUrl);  // connect to OPC UA server
 
+        client.run();
+
     } catch (const opcua::BadStatus&) {  // catch error if connection failed
 
         cerr << "Failed to connect to OPC UA server: " << endl;
@@ -113,7 +115,6 @@ void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string
     ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Checking if OPC UA session activated..."); // log info
 
     client.onSessionActivated([&] {
-
         ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): OPC UA session activated."); // log info
         std::cout << "Session Activated\n";
 
@@ -129,6 +130,7 @@ void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string
         std::vector<MonitoredItemCreateRequest> monitoredItems;
         for (const auto& [nodeId, info] : nodeIdMap) {
             std::array<int, 2> nodeInfo = Helper::getNodeIdInfo(nodeId);
+
             NamespaceIndex nameSpaceIndex = nodeInfo[0];
             uint32_t identifier = nodeInfo[1];
 
@@ -139,15 +141,24 @@ void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string
             monitoredNodes[nodeId] = {get<0>(info), get<1>(info), opcua::DataValue()};
         }
 
-        // send subscription request
-        const CreateMonitoredItemsRequest request({}, subId, TimestampsToReturn::Both, monitoredItems);
-        const auto createMonitoredItemResponse = services::createMonitoredItemsDataChange(client, request, callback, {});
-        createMonitoredItemResponse.responseHeader().serviceResult().throwIfBad();
+        try {
+            // send subscription request int
+            const CreateMonitoredItemsRequest request({}, subId, TimestampsToReturn::Both, monitoredItems);
+            const auto createMonitoredItemResponse = services::createMonitoredItemsDataChange(client, request, callback, {});
+            createMonitoredItemResponse.responseHeader().serviceResult().throwIfBad();
+            std::cout << "Monitored item successfully created!" << std::endl;
+
+        } catch (const std::exception& e)
+            {std::cerr << "Error creating monitored item " << std::endl;
+        }
+
+
     });
 }
 
 // **worker thread processes updates in batches**
 void OPCUAClientManager::processUpdates() {
+
     while (!stopWorker) {
         std::vector<UpdateData> batchUpdates;
 

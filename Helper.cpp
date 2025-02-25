@@ -45,15 +45,19 @@ string Helper::setSQLString(const vector<string>& credentialsSQL) {
 // from nodeId string get nameSpaceIndex and identifier
 std::array<int, 2> Helper::getNodeIdInfo(const string& nodeId) {
 
-    int ns = 0, id = 0;  // initialize values of ns and id
-    char ignore;  // to ignore '=' and ';' characters
+    int ns = 0, id = 0;
+    char prefix1, prefix2, eq1, sep, prefix3, eq2;
+
     std::istringstream ss(nodeId);
 
-    // parsing the format "ns=INT;i=INT"
-    if (ss >> ignore >> ignore >> ns >> ignore >> ignore >> id) {
-        return {ns, id};
-    }
-    throw std::invalid_argument("Invalid NodeId format");
+    // Ensure format: "ns=x;i=y"
+    if (!(ss >> prefix1 >> prefix2 >> eq1 >> ns >> sep >> prefix3 >> eq2 >> id) ||
+        prefix1 != 'n' || prefix2 != 's' || eq1 != '=' || sep != ';' ||
+        prefix3 != 'i' || eq2 != '=') {
+        throw std::invalid_argument("Invalid NodeId format: " + nodeId);
+        }
+
+    return {ns, id};
 }
 
 

@@ -123,57 +123,65 @@ void initialize() {
         file_manager.loadFile(staticInformationFile);
         auto mappedData = file_manager.mapNodeIdToObjectId();
 
+        //for (const auto& [key, value] : mappedData) {
+        //    int firstValue = std::get<0>(value);   // Extract integer value
+        //    std::string secondValue = std::get<1>(value); // Extract string value
+
+        //    std::cout << "Key: " << key << ", Value: (" << firstValue << ", " << secondValue << ")\n";
+        //}
 
 
         const std::chrono::seconds interval(2); // Read every 2 seconds
 
-        // Event handlers
-        opcua_client_manager.client.onConnected([] { std::cout << "Client connected" << std::endl; });
+       //opcua_client_manager.setSubscription(1000,0);
 
-         opcua_client_manager.client.onSessionActivated([&] {
-            std::cout << "Session activated" << std::endl;
+        int nsIndex = 4;
+        int nodeId = 2;
+        std::atomic<bool> keepRunning(true);  // Control variable for stopping the loop
+        opcua_client_manager.client.onSessionActivated([&] {
+      std::thread([&] {
+          // Launch a separate thread for periodic execution
+          while (keepRunning) {
+              // Start measuring time for execution in nanoseconds
+              auto startTime = std::chrono::high_resolution_clock::now();
 
-  // Step 1: Create a Subscription
-opcua::services::createSubscriptionAsync(
-    opcua_client_manager.client,
-    opcua::SubscriptionParameters{250},  // Example: 1000 ms publishing interval
-    true,  // Enable publishing
-    {},  // Optional status change callback
-    [](opcua::IntegerId subId) {
-        std::cout << "Subscription deleted: " << subId << std::endl;
-    },
-    [&](opcua::CreateSubscriptionResponse& response) {
-        std::cout
-            << "Subscription created:\n"
-            << "- status code: " << response.responseHeader().serviceResult() << "\n"
-            << "- subscription id: " << response.subscriptionId() << std::endl;
+              // Call the function to poll node values
+              opcua_client_manager.pollNodeValues(mappedData);
 
-        // Step 2: Create a Monitored Item using the subscriptionId
-        opcua::services::createMonitoredItemDataChangeAsync(
-            opcua_client_manager.client,
-            response.subscriptionId(),  // Use the subscriptionId from the response
-            opcua::ReadValueId(opcua::NodeId(4, 2), opcua::AttributeId::Value),  // NodeId to monitor
-            opcua::MonitoringMode::Reporting,  // Monitoring mode
-            opcua::MonitoringParametersEx{
-                .samplingInterval = 2000  // 2 seconds sampling interval
-            },
-            [](opcua::IntegerId subId, opcua::IntegerId monId, const opcua::DataValue& dv) {
-                std::cout << "New value: " << dv.value().to<bool>()
-                          << " (Timestamp: " << dv.sourceTimestamp().format("%a %b %d %H:%M:%S %Y") << ")\n";
-            },
-             {},// Delete callback – called when the monitored item is deleted
-            [](opcua::MonitoredItemCreateResult& result) {
-                // Completion callback – called when the monitored item is created
-                std::cout << "MonitoredItem created:\n"
-                          << "- Status code: " << result.statusCode() << "\n"
-                          << "- Monitored item ID: " << result.monitoredItemId() << std::endl;
-            }
-        );
+              opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes);
+
+              for (const auto& [key, values] : opcua_client_manager.tableObjects) {
+        std::cout << "Key: " << key << " -> [";
+        for (const auto& [intVal, floatVal] : values) {
+            std::cout << "(" << intVal << ", " << floatVal << "), ";
+        }
+        std::cout << "]\n";
     }
-);
+
+              // End measuring time
+              auto endTime = std::chrono::high_resolution_clock::now();
+              auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);  // Use microseconds for higher precision
+
+              std::cout << "Execution time for pollNodeValues: " << duration.count() << " µs\n";  // µs for microseconds
+
+              // Calculate remaining time to sleep to maintain 1 second frequency
+              const int executionTime = duration.count();  // Time taken by pollNodeValues in microseconds
+              int sleepTime = std::max(0, 1000000 - executionTime);  // 1000000 µs = 1 second
 
 
-        });
+
+
+              // Print how much time we sleep
+              std::cout << "Sleeping for: " << sleepTime / 1000 << " ms\n";  // Convert sleep time to milliseconds for clarity
+
+              // Sleep for the remaining time to complete 1 second cycle
+              std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
+          }
+      }).detach();  // Detach thread to run independently
+  });
+
+
+
 
          opcua_client_manager.client.onSessionClosed([] { std::cout << "Session closed" << std::endl; });
          opcua_client_manager.client.onDisconnected([] { std::cout << "Client disconnected" << std::endl; });

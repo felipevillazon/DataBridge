@@ -34,6 +34,12 @@ public:
     // disconnect from OPC UA Server
     void disconnect();
 
+    // subscribe to node ids
+    void setSubscription(const double& subscriptionInterval,const double& samplingInterval);
+
+    void pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap);
+
+
     // get values from OPC UA Sever using nodeIds
     void getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap);
 
@@ -47,10 +53,7 @@ public:
     std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>> monitoredNodes;
 
     // stores monitored data and group by table name <tableName, <objectId, value [[float type only]]>>
-    std::unordered_map<std::string, std::vector<std::pair<int, float>>> tableObjects;
-
-
-
+    std::unordered_map<std::string,  std::unordered_map<int, float>> tableObjects;
 
 
 private:

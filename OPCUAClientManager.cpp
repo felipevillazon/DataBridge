@@ -93,6 +93,89 @@ void OPCUAClientManager::disconnect() {
 
 }
 
+
+void OPCUAClientManager::setSubscription(const double& subscriptionInterval, const double& samplingInterval) {
+
+
+    client.onConnected([] { std::cout << "Client connected" << std::endl; });  // check if client is connected
+
+    client.onSessionActivated([&] {         // check if session is activated
+        std::cout << "Session activated" << std::endl;
+
+        // create asynchronous subscription
+        opcua::services::createSubscriptionAsync(
+                                                 client,
+                                                 opcua::SubscriptionParameters{subscriptionInterval},  // Example: 1000 ms publishing interval
+                                                 true,  // Enable publishing
+                                                 {},  // Optional status change callback
+                                                 [](opcua::IntegerId subId) { std::cout << "Subscription deleted: " << subId << std::endl;},
+                                                 [&](opcua::CreateSubscriptionResponse& response) {std::cout << "Subscription created:\n"
+                                                                 << "- status code: " << response.responseHeader().serviceResult() << "\n"
+                                                                 << "- subscription id: " << response.subscriptionId() << std::endl;
+
+        // create a Monitored Item using the subscriptionId
+        opcua::services::createMonitoredItemDataChangeAsync(
+                                                            client,
+                                                             response.subscriptionId(),  // Use the subscriptionId from the response
+                                                             opcua::ReadValueId(opcua::NodeId(4, 4), opcua::AttributeId::Value),  // NodeId to monitor
+                                                             opcua::MonitoringMode::Reporting,  // Monitoring mode
+                                                             opcua::MonitoringParametersEx{.samplingInterval = samplingInterval  },  // 2 seconds sampling interval
+                                           [](opcua::IntegerId subId, opcua::IntegerId monId, const opcua::DataValue& dv) {
+                                                                      cout << "New value: " << dv.value().to<bool>()
+                                                                      << " (Timestamp: " << dv.sourceTimestamp().format("%a %b %d %H:%M:%S %Y") << ")\n"; },
+                                                             {},// Delete callback – called when the monitored item is deleted
+                                                             [](opcua::MonitoredItemCreateResult& result) {
+                                                                     std::cout << "MonitoredItem created:\n"
+                                                                      << "- Status code: " << result.statusCode() << "\n"
+                                                                      << "- Monitored item ID: " << result.monitoredItemId() << std::endl; }
+             );
+          }
+       );
+
+
+    });
+}
+
+void OPCUAClientManager::pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap) {
+
+    for (const auto& [nodeIdStr, nodeInfo] : nodeMap) {
+
+        array<int,2> nodeInformation = Helper::getNodeIdInfo(nodeIdStr);
+
+        opcua::NodeId nodeId(nodeInformation[0], nodeInformation[1]);
+
+        opcua::services::readValueAsync(
+            client,
+            nodeId,
+            [nodeIdStr, this, nodeInfo](opcua::Result<opcua::Variant>& result) {
+                std::cout << "Reading NodeId: " << nodeIdStr << " -> Status: " << result.code() << std::endl;
+                if (result.hasValue()) {
+                    try {
+                        const opcua::DataValue dataValue(result.value()); // Extract DataValue
+
+                        int namespaceIndex = std::get<0>(nodeInfo);   // From nodeInfo
+                        std::string identifier = std::get<1>(nodeInfo); // From nodeInfo
+
+                        // Store result in monitoredNodes
+                        monitoredNodes[nodeIdStr] = std::make_tuple(
+                            namespaceIndex,  // Use the namespace index from nodeInfo
+                            identifier,      // Use the identifier from nodeInfo
+                            dataValue        // Store the retrieved DataValue
+                        );
+
+                        std::cout << "Stored value for " << nodeIdStr << ": " << dataValue.value().to<float>() << "\n";
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error processing value for " << nodeIdStr << ": " << e.what() << std::endl;
+                    }
+                } else {
+                    std::cerr << "Failed to read " << nodeIdStr << "\n";
+                }
+            }
+        );
+    }
+}
+
+
 // get values from OPC UA Server using node Ids
 void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap) {
 
@@ -198,7 +281,7 @@ float extractFloatValue(const opcua::DataValue& dataValue) {
         return 0.0f;  // Default to 0.0 if the value is not present
     }
 
-    if (const opcua::Variant& variant = dataValue.value(); variant.isType<int>()) {
+    if (const opcua::Variant& variant = dataValue.value(); variant.isType<int16_t>()) {
         return static_cast<float>(variant.to<int>());
     } else if (variant.isType<double>()) {
         return static_cast<float>(variant.to<double>());
@@ -218,14 +301,13 @@ void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, 
 
     for (const auto& [nodeId, data] : monitoredNodes) {
 
-        int objectId = std::get<0>(data);    // extract objectId
+        int objectId = std::get<0>(data);    // Extract objectId
+        std::string tableName = std::get<1>(data);  // Extract tableName
+        cout << "Table name is: " << tableName << endl;
+        opcua::DataValue dataValue = std::get<2>(data);  // Extract DataValue
 
-        std::string tableName = std::get<1>(data);  // extract tableName
+        const float value = extractFloatValue(dataValue); // Convert DataValue to float
 
-        opcua::DataValue dataValue = std::get<2>(data);  // extract DataValue
-
-        float value = extractFloatValue(dataValue); // convert DataValue to float
-
-        tableObjects[tableName].emplace_back(objectId, value); // store (objectId, float value)
+        tableObjects[tableName][objectId] = value; // Overwrite value for objectId in the unordered_map
     }
 }

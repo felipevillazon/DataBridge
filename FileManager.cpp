@@ -33,8 +33,8 @@ void FileManager::loadFile(const string& filename) {
     throw std::runtime_error("Error parsing configuration file: " + std::string(e.what()));  // message if failed parsing file
   }
 
-  LOG_INFO("ConfigManager::loadConfig(): Loaded configuration file.");
-  std::cout << "Configuration successfully loaded from " << filename << std::endl;   // message if parsing was done successfully
+  LOG_INFO("ConfigManager::loadConfig(): Loaded configuration file: " + filename);
+  // std::cout << "Configuration successfully loaded from " << filename << std::endl;   // message if parsing was done successfully // (avoid printing and use logger)
   }
 
 // retrieve OPC Server login data

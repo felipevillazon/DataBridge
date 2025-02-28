@@ -45,6 +45,7 @@ string Helper::setSQLString(const vector<string>& credentialsSQL) {
 // from nodeId string get nameSpaceIndex and identifier
 std::array<int, 2> Helper::getNodeIdInfo(const string& nodeId) {
 
+    LOG_INFO("DataProcessor::getNodeIdInfo(): Starting getting node id information: (nameSpaceIndex, identifier)...");
     int ns = 0, id = 0;
     char prefix1, prefix2, eq1, sep, prefix3, eq2;
 

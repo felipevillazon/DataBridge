@@ -11,6 +11,7 @@
 SQLClientManager::SQLClientManager(const string& connectionString)
     : sqlEnvHandle(nullptr), sqlConnHandle(nullptr), connectionString(connectionString) {}   // initialize some variables
 
+
 // destructor
 SQLClientManager::~SQLClientManager() {
 
@@ -26,6 +27,7 @@ SQLClientManager::~SQLClientManager() {
         SQLFreeHandle(SQL_HANDLE_ENV, sqlEnvHandle);
     }
 }
+
 
 // connect to SQL server
 bool SQLClientManager::connect() {
@@ -46,7 +48,7 @@ bool SQLClientManager::connect() {
     sqlReturnCode = SQLSetEnvAttr(sqlEnvHandle, SQL_ATTR_ODBC_VERSION, (void*)SQL_OV_ODBC3, 0);
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
         LOG_ERROR("SQLClientManager::connect(): Failed to set ODBC environment attributes."); // log error
-        std::cerr << "Error setting ODBC version." << std::endl;
+        // std::cerr << "Error setting ODBC version." << std::endl; // (avoid print and use logger)
         return false;
     }
 
@@ -54,7 +56,7 @@ bool SQLClientManager::connect() {
     sqlReturnCode = SQLAllocHandle(SQL_HANDLE_DBC, sqlEnvHandle, &sqlConnHandle);
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
         LOG_ERROR("SQLClientManager::connect(): Failed to allocate ODBC connection handle.");  // log error
-        std::cerr << "Error allocating ODBC connection handle." << std::endl;
+        //std::cerr << "Error allocating ODBC connection handle." << std::endl; // (avoid print and use logger)
         return false;
     }
 
@@ -67,17 +69,18 @@ bool SQLClientManager::connect() {
 
         // fetch error details
         SQLGetDiagRec(SQL_HANDLE_DBC, sqlConnHandle, 1, sqlState, &nativeError, errorMsg, sizeof(errorMsg), &textLen);
-        LOG_ERROR("SQLClientManager::connect(): SQLGetDiagRec failed.");  // log error
-        std::cerr << "Connection failed. SQL State: " << sqlState
-                  << ", Message: " << errorMsg << std::endl;
+        LOG_ERROR("SQLClientManager::connect(): SQLGetDiagRec failed. SQL State: " + std::string(reinterpret_cast<char*>(sqlState)) +
+          ", Message: " + std::string(reinterpret_cast<char*>(errorMsg)));   // log error
+        // std::cerr << "Connection failed. SQL State: " << sqlState << ", Message: " << errorMsg << std::endl; // (avoid print and use logger)
         return false;
     }
 
     LOG_INFO("SQLClientManager::connect(): Successfully connected to database.");  // log info
-    std::cout << "Database connection established successfully!" << std::endl;
+    // std::cout << "Database connection established successfully!" << std::endl;  //  (avoid print and use logger)
     return true;
 
 }
+
 
 // disconnect from SQL server
 void SQLClientManager::disconnect() {
@@ -90,10 +93,10 @@ void SQLClientManager::disconnect() {
         sqlReturnCode = SQLDisconnect(sqlConnHandle);   // disconnect from server
         if (sqlReturnCode == SQL_SUCCESS || sqlReturnCode == SQL_SUCCESS_WITH_INFO) {   // check if disconnection is successful
             LOG_INFO("SQLClientManager::disconnect(): Successfully disconnected from SQL server."); // log info
-            std::cout << "Database disconnected successfully." << std::endl;    // return positive message
+            // std::cout << "Database disconnected successfully." << std::endl;    // return positive message  (avoid print and use logger)
         } else {
             LOG_ERROR("SQLClientManager::disconnect(): Failed to disconnect from SQL server");  // log error
-            std::cerr << "Error during database disconnection." << std::endl;   // return negative message
+            // std::cerr << "Error during database disconnection." << std::endl;   // return negative message  (avoid print and use logger)
         }
         SQLFreeHandle(SQL_HANDLE_DBC, sqlConnHandle);  // free connection handle variable
         sqlConnHandle = nullptr;     // assign to null pointer
@@ -104,6 +107,7 @@ void SQLClientManager::disconnect() {
         sqlEnvHandle = nullptr;  // assign to null pointer
     }
 }
+
 
 // execute any query, can be reused with different queries
 bool SQLClientManager::executeQuery(const string& query) {
@@ -117,13 +121,13 @@ bool SQLClientManager::executeQuery(const string& query) {
     LOG_INFO("SQLClientManager::executeQuery: Allocating statement handle.");  // log info
     sqlReturnCode = SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &hStmt);
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
-        cerr << "Error allocating statement handle." << endl;
+        // cerr << "Error allocating statement handle." << endl; //  (avoid print and use logger)
         LOG_ERROR("SQLClientManager::executeQuery: Allocating statement handle failed.");  // log error
         return false;
-    } else {
-        LOG_INFO("SQLClientManager::executeQuery: Allocating statement handle successfully");  // log info
-        cout << "Allocating statement handle successfully!" << endl;
     }
+
+    LOG_INFO("SQLClientManager::executeQuery: Allocating statement handle successfully");  // log info
+    // cout << "Allocating statement handle successfully!" << endl;  (avoid print and use logger)
 
     // execute SQL query
     LOG_INFO("SQLClientManager::executeQuery: Executing query...");  // log info
@@ -131,11 +135,14 @@ bool SQLClientManager::executeQuery(const string& query) {
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
         // Retrieve detailed error information
         if (SQLGetDiagRec(SQL_HANDLE_STMT, hStmt, 1, sqlState, &nativeError, errMsg, sizeof(errMsg), &textLength) == SQL_SUCCESS) {
-            std::cerr << "SQL Execution Error [" << sqlState << "] (" << nativeError << "): " << errMsg << std::endl;
-            LOG_ERROR("SQLClientManager::executeQuery: Executing query failed.");  // log error
+            // std::cerr << "SQL Execution Error [" << sqlState << "] (" << nativeError << "): " << errMsg << std::endl;  // (avoid print and use logger)
+
+            LOG_ERROR("SQLClientManager::executeQuery: Executing query failed. SQL State: " + std::string(reinterpret_cast<char*>(sqlState)) +
+          ", Message: " + std::string(reinterpret_cast<char*>(errMsg)));  // log error
+
         } else {
             LOG_ERROR("SQLClientManager::executeQuery: Executing query failed.");  // log error
-            std::cerr << "SQL Execution Error: Unable to retrieve error details." << std::endl;
+            // std::cerr << "SQL Execution Error: Unable to retrieve error details." << std::endl; //  (avoid print and use logger)
         }
 
         SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
@@ -143,12 +150,13 @@ bool SQLClientManager::executeQuery(const string& query) {
     }
 
     LOG_INFO("SQLClientManager::executeQuery: Executing query successfully.");  // log info
-    std::cout << "Query executed successfully: " << query << std::endl;
+    // std::cout << "Query executed successfully: " << query << std::endl; // (avoid print and use logger)
 
     // Free statement handle
     SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
     return true;
 }
+
 
 // create SQL database tables from external file
  void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
@@ -161,20 +169,21 @@ bool SQLClientManager::executeQuery(const string& query) {
     if (fileManager.configData.empty()) {
 
         LOG_ERROR("SQLClientManager::createDatabaseSchema(): Loading JSON file failed.");  // log error
-        cerr << "Failed to load schema file!" << endl;
+        // cerr << "Failed to load schema file!" << endl; // (avoid print and use logger)
         return;
     }
 
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file successfully.");  // log info
-    cout << "Starting database schema creation..." << endl;
+    // cout << "Starting database schema creation..." << endl; // (avoid print and use logger)
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting database schema creation...");  // log info
 
     // start a transaction
-    executeQuery("BEGIN TRANSACTION;");
+    executeQuery("BEGIN TRANSACTION;");  // begin sql transaction
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting SQL transaction...");  // log info
 
     bool success = true;  // flag to track execution success
 
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Start iteration over tables, checking if tables already exist, if not, creating it..."); // log info
     for (const auto& table : fileManager.configData["tables"].items()) {
         const string& tableName = table.key();
         string createTableSQL = "IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '" + tableName + "') BEGIN\n";
@@ -226,12 +235,12 @@ bool SQLClientManager::executeQuery(const string& query) {
 
         createTableSQL += "\n);\nEND;";
 
-        cout << "Executing: " << createTableSQL << endl;
+        // cout << "Executing: " << createTableSQL << endl; // (avoid printing and use logger)
 
         // execute SQL to create table
         if (!executeQuery(createTableSQL)) {
             LOG_ERROR("SQLClientManager::createDatabaseSchema(): Failed to create table.");  // log error
-            cerr << "Failed to create table: " << tableName << ". Rolling back transaction." << endl;
+            // cerr << "Failed to create table: " << tableName << ". Rolling back transaction." << endl; // (avoid printing and use logger)
             LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");  // log info
             success = false;
             break;  // Stop execution if one query fails
@@ -242,15 +251,16 @@ bool SQLClientManager::executeQuery(const string& query) {
     if (success) {
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Commit transaction.");  // log info
         executeQuery("COMMIT TRANSACTION;");
-        cout << "Database schema created successfully!" << endl;
+        // cout << "Database schema created successfully!" << endl; // (avoid printing and use logger)
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Database schema created successfully.");  // log info
     } else {
         executeQuery("ROLLBACK TRANSACTION;");
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");  // log info
-        cerr << "Transaction rolled back due to errors!" << endl;
+        // cerr << "Transaction rolled back due to errors!" << endl; // (avoid printing and use logger)
         LOG_ERROR("SQLClientManager::createDatabaseSchema(): Transaction rolled back due to errors.");  // log error
     }
 }
+
 
 // prepare insert statements for SQL query
 void SQLClientManager::prepareInsertStatements(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects) {
@@ -263,15 +273,16 @@ void SQLClientManager::prepareInsertStatements(const std::unordered_map<std::str
         queryStream << "INSERT INTO " << tableName << " (object_id, object_value) VALUES (?, ?)";
         std::string query = queryStream.str();
 
-        std::cout << "Prepared query for table '" << tableName << "': " << query << std::endl;
+        // std::cout << "Prepared query for table '" << tableName << "': " << query << std::endl; // (avoid printing and use logger)
+        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepared query for table" + tableName + "..."); // log info
 
-        // Allocate statement handle
+        // allocate statement handle
         SQLHSTMT stmt;
         SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt);
 
-        // Prepare the SQL statement
+        // prepare the SQL statement
         if (SQLPrepare(stmt, (SQLCHAR*)query.c_str(), SQL_NTS) != SQL_SUCCESS) {
-            std::cerr << "Failed to prepare statement for table: " << tableName << std::endl;
+            // std::cerr << "Failed to prepare statement for table: " << tableName << std::endl; // (avoid printing and use logger)
             LOG_ERROR("SQLClientManager::prepareInsertStatements(): Preparing insert statements failed.");  // log error
             continue;
         }
@@ -279,10 +290,12 @@ void SQLClientManager::prepareInsertStatements(const std::unordered_map<std::str
         // Store prepared statement
         preparedStatements[tableName] = stmt;
 
-        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepare insert statement successfully.");  // log info
-        std::cout << "Successfully prepared statement for table: " << tableName << std::endl;
+        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepare insert statement successfully for table " + tableName);  // log info
+        // std::cout << "Successfully prepared statement for table: " << tableName << std::endl; // (avoid printing and use logger)
+
     }
 }
+
 
 // insert data by input table name, object id and value from opc ua node id
 bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std::unordered_map<int, float>>& tableObjects) {
@@ -294,7 +307,7 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
 
         if (const std::string beginTransaction = "BEGIN TRANSACTION;"; !executeQuery(beginTransaction)) {
             LOG_ERROR("SQLClientManager::insertBatchData(): Failed to begin transaction.");  // log error
-            std::cerr << "Failed to start transaction" << std::endl;
+            // std::cerr << "Failed to start transaction" << std::endl; // (avoid printing and use logger)
             return false;
         }
 
@@ -304,8 +317,8 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
             // retrieve the prepared statement for the table
             auto stmt = preparedStatements.find(tableName);
             if (stmt == preparedStatements.end()) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Prepared statement not found");  // log error
-                std::cerr << "Prepared statement not found for table: " << tableName << std::endl;
+                LOG_ERROR("SQLClientManager::insertBatchData(): Prepared statement not found for table " + tableName);  // log error
+                // std::cerr << "Prepared statement not found for table: " << tableName << std::endl; // (avoid printing and use logger)
                 continue; // skip to next table if the statement is not found
             }
 
@@ -327,23 +340,23 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
             // bind the data arrays to the prepared statement (array binding)
             SQLRETURN ret = SQLBindParameter(preparedStmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, data1Ind.data(), 0, nullptr);
             if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind parameters.");  // log error
-                std::cerr << "Failed to bind data1 for table: " << tableName << std::endl;
+                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind parameters (object_id).");  // log error
+                // std::cerr << "Failed to bind data1 for table: " << tableName << std::endl; // (avoid printing and use logger)
                 continue;
             }
 
             ret = SQLBindParameter(preparedStmt, 2, SQL_PARAM_INPUT, SQL_C_FLOAT, SQL_REAL, 0, 0, data2Ind.data(), 0, nullptr);
             if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind data.");  // log error
-                std::cerr << "Failed to bind data2 for table: " << tableName << std::endl;
+                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind data (object_values).");  // log error
+                // std::cerr << "Failed to bind data2 for table: " << tableName << std::endl; // (avoid printing and use logger)
                 continue;
             }
 
             // execute the batch insert (inserting all rows at once)
             ret = SQLExecute(preparedStmt);
             if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to execute statement.");  // log error
-                std::cerr << "SQLExecute failed for table: " << tableName << std::endl;
+                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to execute statement for table " + tableName);  // log error
+                // std::cerr << "SQLExecute failed for table: " << tableName << std::endl; // (avoid printing and use logger)
                 continue;
             }
         }
@@ -351,7 +364,7 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
         // commit transaction with COMMIT
         if (const std::string commitTransaction = "COMMIT;"; !executeQuery(commitTransaction)) {
             LOG_ERROR("SQLClientManager::insertBatchData(): Failed to commit transaction."); // log error
-            std::cerr << "Failed to commit transaction" << std::endl;
+            // std::cerr << "Failed to commit transaction" << std::endl; // (avoid printing and use logger)
             throw std::runtime_error("COMMIT failed");
         }
 
@@ -362,7 +375,7 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
         executeQuery(rollbackTransaction);
 
         LOG_ERROR("SQLClientManager::insertBatchData(): Failed to rollback transaction."); // log error
-        std::cerr << "Transaction failed: " << e.what() << std::endl;
+        // std::cerr << "Transaction failed: " << e.what() << std::endl; // (avoid printing and use logger)
         return false;
     }
 }

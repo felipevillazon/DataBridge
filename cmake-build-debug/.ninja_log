@@ -52,3 +52,8 @@
 3	3285	1740745316299550046	CMakeFiles/DataBridge.dir/SQLClientManager.cpp.o	a50639c8f8e0a7
 3	4130	1740745316299550046	CMakeFiles/DataBridge.dir/main.cpp.o	a4eb36d0c20d35fe
 4130	4317	1740745320426570021	DataBridge	426902b336231ef1
+3	664	1740747551416493789	CMakeFiles/DataBridge.dir/Helper.cpp.o	27a4fbb7b863a3b
+2	3228	1740747551415493784	CMakeFiles/DataBridge.dir/SQLClientManager.cpp.o	a50639c8f8e0a7
+2	4007	1740747551415493784	CMakeFiles/DataBridge.dir/FileManager.cpp.o	5d9a04f29baebe3d
+2	4062	1740747551415493784	CMakeFiles/DataBridge.dir/main.cpp.o	a4eb36d0c20d35fe
+4062	4245	1740747555475511222	DataBridge	426902b336231ef1

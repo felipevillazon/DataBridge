@@ -28,8 +28,8 @@ public:
     void createDatabaseSchema(const string& schemaFile); // create database tables from file with JSON format
     //void insertAlarm(const string& table, const string& alarm);  // insert alarm into table Alarms
     bool executeQuery(const string& query); // execute query from by using prestatement
-    void prepareInsertStatements(const std::unordered_map<std::string, std::vector<std::pair<int, float>>>& tableObjects);
-    bool insertBatchData(std::unordered_map<std::string, std::vector<std::pair<int, float>>>& tableObjects);
+    void prepareInsertStatements(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects);
+    bool insertBatchData(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects);
 
 private:
     SQLHANDLE sqlEnvHandle; // environment handle

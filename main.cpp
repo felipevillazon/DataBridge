@@ -13,7 +13,7 @@
 std::atomic<bool> keepRunning(true);
 
 // Signal handler for clean shutdown
-void signalHandler(int signum) {
+void signalHandler(const int signum) {
     std::cout << "\nReceived signal " << signum << ". Shutting down gracefully...\n";
     keepRunning = false;
 }
@@ -56,45 +56,8 @@ bool connectToOPCUA(OPCUAClientManager& opcua_client_manager) {
 
 // Function to process data in a loop
 void runDataProcessingLoop(SQLClientManager& sql_client_manager, OPCUAClientManager& opcua_client_manager,
-                           const std::unordered_map<std::string, std::tuple<int, std::string>>& mappedData, int intervalInSeconds) {
-    const std::chrono::seconds interval(intervalInSeconds);
+                           const std::unordered_map<std::string, std::tuple<int, std::string>>& mappedData, int intervalInSeconds) {}
 
-    while (keepRunning) {
-
-        opcua_client_manager.getValueFromNodeId(mappedData);
-
-        opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes);
-
-        //sql_client_manager.insertBatchData(opcua_client_manager.tableObjects);
-        std::this_thread::sleep_for(interval);
-    }
-}
-void periodicRead(opcua::Client& client, NamespaceIndex nsIndex, int32_t nodeId, std::chrono::seconds interval) {
-    while (keepRunning) {
-        // Perform asynchronous read
-        opcua::services::readValueAsync(
-            client,
-            opcua::NodeId(nsIndex, nodeId),
-            [nsIndex, nodeId](opcua::Result<opcua::Variant>& result) {
-                std::cout << "Read request for NodeId (ns=" << nsIndex << "; id=" << nodeId << ") completed.\n";
-                std::cout << "Status code: " << result.code() << std::endl;
-
-                if (result.hasValue()) {
-                    try {
-                        const auto& value = result.value();
-                        std::cout << "  Value: " << (value.to<bool>() ? "true" : "false") << "\n";
-                    } catch (const std::exception& e) {
-                        std::cerr << "Error extracting value: " << e.what() << std::endl;
-                    }
-                } else {
-                    std::cerr << "Read operation failed for NodeId (ns=" << nsIndex << "; id=" << nodeId << ")\n";
-                }
-            }
-        );
-
-        std::this_thread::sleep_for(interval); // Wait for the specified interval before next read
-    }
-}
 
 
 // Main initialization function
@@ -123,40 +86,24 @@ void initialize() {
         file_manager.loadFile(staticInformationFile);
         auto mappedData = file_manager.mapNodeIdToObjectId();
 
-        //for (const auto& [key, value] : mappedData) {
-        //    int firstValue = std::get<0>(value);   // Extract integer value
-        //    std::string secondValue = std::get<1>(value); // Extract string value
-
-        //    std::cout << "Key: " << key << ", Value: (" << firstValue << ", " << secondValue << ")\n";
-        //}
-
-
         const std::chrono::seconds interval(2); // Read every 2 seconds
 
-       //opcua_client_manager.setSubscription(1000,0);
-
-        int nsIndex = 4;
-        int nodeId = 2;
         std::atomic<bool> keepRunning(true);  // Control variable for stopping the loop
         opcua_client_manager.client.onSessionActivated([&] {
-      std::thread([&] {
+        std::thread([&] {
           // Launch a separate thread for periodic execution
           while (keepRunning) {
               // Start measuring time for execution in nanoseconds
               auto startTime = std::chrono::high_resolution_clock::now();
 
-              // Call the function to poll node values
-              opcua_client_manager.pollNodeValues(mappedData);
+              // opcua server-client interaction
+              opcua_client_manager.pollNodeValues(mappedData);   // poll values from all mapped node ids
+              opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes);  // group data and prepared it for sql database
 
-              opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes);
+              // sql server-client interaction
+              sql_client_manager.prepareInsertStatements(opcua_client_manager.tableObjects);   // prepare insert statements for sql database
+              sql_client_manager.insertBatchData(opcua_client_manager.tableObjects);    // insert batch data into tables, all at once
 
-              for (const auto& [key, values] : opcua_client_manager.tableObjects) {
-        std::cout << "Key: " << key << " -> [";
-        for (const auto& [intVal, floatVal] : values) {
-            std::cout << "(" << intVal << ", " << floatVal << "), ";
-        }
-        std::cout << "]\n";
-    }
 
               // End measuring time
               auto endTime = std::chrono::high_resolution_clock::now();
@@ -169,12 +116,10 @@ void initialize() {
               int sleepTime = std::max(0, 1000000 - executionTime);  // 1000000 µs = 1 second
 
 
-
-
               // Print how much time we sleep
               std::cout << "Sleeping for: " << sleepTime / 1000 << " ms\n";  // Convert sleep time to milliseconds for clarity
 
-              // Sleep for the remaining time to complete 1 second cycle
+              // Sleep for the remaining time to complete 1-second cycle
               std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
           }
       }).detach();  // Detach thread to run independently

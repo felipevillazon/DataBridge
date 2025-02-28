@@ -34,14 +34,8 @@ public:
     // disconnect from OPC UA Server
     void disconnect();
 
-    // subscribe to node ids
-    void setSubscription(const double& subscriptionInterval,const double& samplingInterval);
-
+    // poll values from node ids asynchronously
     void pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap);
-
-
-    // get values from OPC UA Sever using nodeIds
-    void getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap);
 
     // group values and objects ids by table names, also convert DataValue to float to match SQL datatype
     void groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes);
@@ -67,19 +61,8 @@ private:
     // password credentials
     string password;
 
-    struct UpdateData {
-        string nodeId{};
-        opcua::DataValue value;
-    };
-
-    std::queue<UpdateData> updateQueue;
-    std::mutex queueMutex;
-    std::condition_variable queueCV;
-    std::thread workerThread;
-    bool stopWorker;
-
-    void processUpdates();
-
+    // One mutex per node
+    std::unordered_map<std::string, std::mutex> nodeLocks;
 
 };
 

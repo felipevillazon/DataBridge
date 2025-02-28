@@ -54,7 +54,9 @@ std::array<int, 2> Helper::getNodeIdInfo(const string& nodeId) {
     if (!(ss >> prefix1 >> prefix2 >> eq1 >> ns >> sep >> prefix3 >> eq2 >> id) ||
         prefix1 != 'n' || prefix2 != 's' || eq1 != '=' || sep != ';' ||
         prefix3 != 'i' || eq2 != '=') {
-        throw std::invalid_argument("Invalid NodeId format: " + nodeId);
+
+        LOG_ERROR("Helper::getNodeIdInfo: Invalid node ID. Wrong format or not existing in OPC UA server: " + nodeId);   // log error
+        throw std::invalid_argument("Invalid node ID. Wrong format or not existing in OPC UA server: " + nodeId);
         }
 
     return {ns, id};

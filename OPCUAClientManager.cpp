@@ -1,4 +1,4 @@
-//z
+//
 // Created by felipevillazon on 12/19/24.
 //
 
@@ -6,23 +6,17 @@
 #include "Logger.h"
 #include <open62541pp/node.hpp>
 #include "Helper.h"
+#include <mutex>
 
 // constructor
 OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& username, const string& password)
-    : endpointUrl(endpointUrl), username(username), password(password), stopWorker(false) {
-    workerThread = std::thread(&OPCUAClientManager::processUpdates, this); // start worker thread for processing updates
-}
+    : endpointUrl(endpointUrl), username(username), password(password) {}
+
 
 // destructor
 OPCUAClientManager::~OPCUAClientManager() {
 
     // The destructor of the class will disconnect the client from the OPC UA server if called
-
-    stopWorker = true;
-    queueCV.notify_all();
-    if (workerThread.joinable()) {
-        workerThread.join();
-    }
 
     ::LOG_INFO("OPCUAClientManager: Disconnecting from OPC UA server by using destructor of the class."); // log info
 
@@ -32,12 +26,14 @@ OPCUAClientManager::~OPCUAClientManager() {
 
 }
 
+
 // connect to OPC UA Server
 bool OPCUAClientManager::connect() {
-    ::LOG_INFO("OPCUAClientManager::connect(): Connecting to OPC UA server...");
+
+    ::LOG_INFO("OPCUAClientManager::connect(): Connecting to OPC UA server...");  // log info
 
     if (client.isConnected()) {  // check if already connected
-        std::cerr << "Client is already connected!" << std::endl;
+        //std::cerr << "Client is already connected!" << std::endl; (avoid printing and use logger)
         ::LOG_INFO("OPCUAClientManager::connect(): Client already connected.");  // log info
         return true;  // already connected, return success
     }
@@ -54,21 +50,24 @@ bool OPCUAClientManager::connect() {
 
         client.connect(endpointUrl);  // connect to OPC UA server
 
-        client.run();
+        client.run();  // run server-client connection
 
-    } catch (const opcua::BadStatus&) {  // catch error if connection failed
+        ::LOG_INFO("OPCUAClientManager::connect(): OPCUA client connected and running.");  // log info
 
-        cerr << "Failed to connect to OPC UA server: " << endl;
-        ::LOG_ERROR("OPCUAClientManager::connect(): Failed to connect to OPC UA server."); // log error
+    } catch (const opcua::BadStatus& e) {  // catch error if connection failed
+
+        // cerr << "Failed to connect to OPC UA server: " << endl; (avoid printing and use logger)
+        ::LOG_ERROR("OPCUAClientManager::connect(): Failed to connect to OPC UA server. - Exception: " + std::string(e.what())); // log error
         return false;
 
     }
 
-    std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl;
+    // std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl; (avoid printing and use logger)
     ::LOG_INFO("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
 
     return true;
 }
+
 
 // disconnect from OPC UA Server
 void OPCUAClientManager::disconnect() {
@@ -82,93 +81,66 @@ void OPCUAClientManager::disconnect() {
     // check if client is disconnected
     if (!client.isConnected()) {  // if disconnection sucessfully
 
-        std::cout << "OPC UA client successfully disconnected." << std::endl; // return positive message
+        //std::cout << "OPC UA client successfully disconnected." << std::endl; // return positive message
         ::LOG_INFO("OPCUAClientManager::disconnect(): Disconnection from OPC UA server successfully."); // log info
 
     } else {  // if disconnection failed
 
         ::LOG_ERROR("OPCUAClientManager::disconnect(): Disconnection from OPC UA server failed."); // log error
-        std::cerr << "OPC UA client disconnection failed!" << std::endl;  // return negative message
+        //std::cerr << "OPC UA client disconnection failed!" << std::endl;  // return negative message
     }
 
 }
 
 
-void OPCUAClientManager::setSubscription(const double& subscriptionInterval, const double& samplingInterval) {
-
-
-    client.onConnected([] { std::cout << "Client connected" << std::endl; });  // check if client is connected
-
-    client.onSessionActivated([&] {         // check if session is activated
-        std::cout << "Session activated" << std::endl;
-
-        // create asynchronous subscription
-        opcua::services::createSubscriptionAsync(
-                                                 client,
-                                                 opcua::SubscriptionParameters{subscriptionInterval},  // Example: 1000 ms publishing interval
-                                                 true,  // Enable publishing
-                                                 {},  // Optional status change callback
-                                                 [](opcua::IntegerId subId) { std::cout << "Subscription deleted: " << subId << std::endl;},
-                                                 [&](opcua::CreateSubscriptionResponse& response) {std::cout << "Subscription created:\n"
-                                                                 << "- status code: " << response.responseHeader().serviceResult() << "\n"
-                                                                 << "- subscription id: " << response.subscriptionId() << std::endl;
-
-        // create a Monitored Item using the subscriptionId
-        opcua::services::createMonitoredItemDataChangeAsync(
-                                                            client,
-                                                             response.subscriptionId(),  // Use the subscriptionId from the response
-                                                             opcua::ReadValueId(opcua::NodeId(4, 4), opcua::AttributeId::Value),  // NodeId to monitor
-                                                             opcua::MonitoringMode::Reporting,  // Monitoring mode
-                                                             opcua::MonitoringParametersEx{.samplingInterval = samplingInterval  },  // 2 seconds sampling interval
-                                           [](opcua::IntegerId subId, opcua::IntegerId monId, const opcua::DataValue& dv) {
-                                                                      cout << "New value: " << dv.value().to<bool>()
-                                                                      << " (Timestamp: " << dv.sourceTimestamp().format("%a %b %d %H:%M:%S %Y") << ")\n"; },
-                                                             {},// Delete callback – called when the monitored item is deleted
-                                                             [](opcua::MonitoredItemCreateResult& result) {
-                                                                     std::cout << "MonitoredItem created:\n"
-                                                                      << "- Status code: " << result.statusCode() << "\n"
-                                                                      << "- Monitored item ID: " << result.monitoredItemId() << std::endl; }
-             );
-          }
-       );
-
-
-    });
-}
-
+// poll values from node ids asynchronously
 void OPCUAClientManager::pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap) {
 
-    for (const auto& [nodeIdStr, nodeInfo] : nodeMap) {
 
-        array<int,2> nodeInformation = Helper::getNodeIdInfo(nodeIdStr);
+    ::LOG_INFO("OPCUAClientManager::pollNodeValues(): Starting polling values from nodes..."); // log info
 
-        opcua::NodeId nodeId(nodeInformation[0], nodeInformation[1]);
+    for (const auto& [nodeIdStr, nodeInfo] : nodeMap) {   // loop over all mapped nodeIds
 
-        opcua::services::readValueAsync(
-            client,
-            nodeId,
-            [nodeIdStr, this, nodeInfo](opcua::Result<opcua::Variant>& result) {
-                std::cout << "Reading NodeId: " << nodeIdStr << " -> Status: " << result.code() << std::endl;
-                if (result.hasValue()) {
-                    try {
-                        const opcua::DataValue dataValue(result.value()); // Extract DataValue
+        ::LOG_INFO("OPCUAClientManager::pollNodeValues(): Retrieving nameSpaceIndex and Identifier from nodeID..."); // log info
+        array<int,2> nodeInformation = Helper::getNodeIdInfo(nodeIdStr);  // extract numeric nameSpaceIndex and identifier from string "ns=x;i=y"
 
-                        int namespaceIndex = std::get<0>(nodeInfo);   // From nodeInfo
-                        std::string identifier = std::get<1>(nodeInfo); // From nodeInfo
+        ::LOG_DEBUG("OPCUAClientManager::pollNodeValues(): Creating opcua::NodeId object.");  // log debug
+        opcua::NodeId nodeId(nodeInformation[0], nodeInformation[1]);   // create NodeId object nodeId(nameSpaceIndex, identifier)
 
-                        // Store result in monitoredNodes
-                        monitoredNodes[nodeIdStr] = std::make_tuple(
-                            namespaceIndex,  // Use the namespace index from nodeInfo
-                            identifier,      // Use the identifier from nodeInfo
-                            dataValue        // Store the retrieved DataValue
-                        );
+        ::LOG_DEBUG("OPCUAClientManager::pollNodeValues(): Start opcua::services::readValueAsync.");  // log debug
+        opcua::services::readValueAsync(     // read values from nodeIds asynchronously  (not network blocking)
+            client,      // Client* client
+            nodeId,         // NodeId nodeId(nameSpaceIndex, identifier)
+            [nodeIdStr, this, nodeInfo](opcua::Result<opcua::Variant>& result) {      // callback method
 
-                        std::cout << "Stored value for " << nodeIdStr << ": " << dataValue.value().to<float>() << "\n";
-                    } catch (const std::exception& e) {
-                        std::cerr << "Error processing value for " << nodeIdStr << ": " << e.what() << std::endl;
+                ::LOG_INFO("OPCUAClientManager::pollNodeValues(): Reading nodeId: " + nodeIdStr);       // log info
+
+                if (result.hasValue()) {  // check if nodeId has value
+                    try {  // try and catch for better handling
+
+                        {
+                            const opcua::DataValue dataValue(result.value());  // get DataValue
+                            int objectID = std::get<0>(nodeInfo);      // get objectId from nodeId string
+                            std::string tableName = std::get<1>(nodeInfo);   // get identifier from nodeId string
+                            std::lock_guard<std::mutex> lock(nodeLocks[nodeIdStr]);    // mutex lock for nodeId
+                            monitoredNodes[nodeIdStr] = std::make_tuple(objectID, tableName, dataValue);  // update monitoredNdes
+                     }
+
+                        ::LOG_INFO("OPCUAClientManager::pollNodeValues(): Store value from " + nodeIdStr + "successfully.");       // log info
+
+                        //std::cout << "Stored value for " << nodeIdStr << ": " << dataValue.value().to<float>() << "\n";  // print not needed, slow down process
+
+                    } catch (const std::exception& e) {   // catch any error
+
+                        ::LOG_ERROR("OPCUAClientManager::pollNodeValues(): Error processing value for nodeId: " + nodeIdStr + " - Exception: " + std::string(e.what())); // log error
+
+                        // cerr << "Error processing value for " << nodeIdStr << ": " << e.what() << endl; // print not needed, slow down process
                     }
                 } else {
-                    std::cerr << "Failed to read " << nodeIdStr << "\n";
+
+                    ::LOG_ERROR("OPCUAClientManager::pollNodeValues(): Failed to read: " + nodeIdStr);  // log error
+
+                    // std::cerr << "Failed to read " << nodeIdStr << "\n";  // print not needed, slow down process (just for debugging)
                 }
             }
         );
@@ -176,138 +148,44 @@ void OPCUAClientManager::pollNodeValues(const std::unordered_map<std::string, st
 }
 
 
-// get values from OPC UA Server using node Ids
-void OPCUAClientManager::getValueFromNodeId(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeIdMap) {
-
-    ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Starting getting values from nodeIds..."); // log info
-
-    // callback to update monitoredNodes when data changes
-    auto callback = [&](uint32_t subId, uint32_t monId, const opcua::DataValue& value) {
-        std::lock_guard<std::mutex> lock(queueMutex);
-
-        // iterate over the nodeIdMap to find the nodeId and push to the queue
-        for (const auto& [nodeId, info] : nodeIdMap) {
-            // push the nodeId and value to the queue
-            updateQueue.push({nodeId, value});
-        }
-
-        // notify the worker thread to process the updates
-        queueCV.notify_one();
-    };
-
-    ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Checking if OPC UA session activated..."); // log info
-
-    client.onSessionActivated([&] {
-        ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): OPC UA session activated."); // log info
-        std::cout << "Session Activated\n";
-
-        // create subscription
-        ::LOG_INFO("OPCUAClientManager::getValueFromNodeId(): Creating OPC UA subscriptions to node IDs"); // log info
-        std::cout << "Creating subscription...\n";
-        const SubscriptionParameters parameters{};
-        const auto createSubscriptionResponse = createSubscription(client, parameters, true, {}, {});
-        createSubscriptionResponse.responseHeader().serviceResult().throwIfBad();
-        const auto subId = createSubscriptionResponse.subscriptionId();
-
-        // Prepare nodes for monitoring
-        std::vector<MonitoredItemCreateRequest> monitoredItems;
-        for (const auto& [nodeId, info] : nodeIdMap) {
-            std::array<int, 2> nodeInfo = Helper::getNodeIdInfo(nodeId);
-
-            NamespaceIndex nameSpaceIndex = nodeInfo[0];
-            uint32_t identifier = nodeInfo[1];
-
-            MonitoredItemCreateRequest item({{nameSpaceIndex, identifier}, opcua::AttributeId::Value});
-            monitoredItems.push_back(item);
-
-            // store the mapping (efficient lookup)
-            monitoredNodes[nodeId] = {get<0>(info), get<1>(info), opcua::DataValue()};
-        }
-
-        try {
-            // send subscription request int
-            const CreateMonitoredItemsRequest request({}, subId, TimestampsToReturn::Both, monitoredItems);
-            const auto createMonitoredItemResponse = services::createMonitoredItemsDataChange(client, request, callback, {});
-            createMonitoredItemResponse.responseHeader().serviceResult().throwIfBad();
-            std::cout << "Monitored item successfully created!" << std::endl;
-
-        } catch (const std::exception& e)
-            {std::cerr << "Error creating monitored item " << std::endl;
-        }
-
-
-    });
-}
-
-// **worker thread processes updates in batches**
-void OPCUAClientManager::processUpdates() {
-
-    while (!stopWorker) {
-        std::vector<UpdateData> batchUpdates;
-
-        // Wait for updates in the queue
-        {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            queueCV.wait_for(lock, std::chrono::milliseconds(500), [&] { return !updateQueue.empty(); });
-
-            // Move all updates from the queue to the batch
-            while (!updateQueue.empty()) {
-                batchUpdates.push_back(updateQueue.front());
-                updateQueue.pop();
-            }
-        }
-
-        // Process the updates in the batch
-        if (!batchUpdates.empty()) {
-            for (const auto& update : batchUpdates) {
-                // Find the nodeId in the monitoredNodes map and update the value
-                if (monitoredNodes.find(update.nodeId) != monitoredNodes.end()) {
-                    std::get<2>(monitoredNodes[update.nodeId]) = update.value;  // Update the value
-                    std::cout << "Updated Node ID " << update.nodeId << " with new value.\n";
-                }
-            }
-        }
-    }
-}
-
 // convert DataValue to float
 float extractFloatValue(const opcua::DataValue& dataValue) {
 
-    ::LOG_INFO("OPCUAClientManager::extractFloatValue(): Converting to float data type..."); // log info
+    ::LOG_INFO("OPCUAClientManager::extractFloatValue(): Converting opcua::DataValue to float..."); // log info
 
     if (!dataValue.hasValue()) {
+        ::LOG_ERROR("OPCUAClientManager::extractFloatValue(): Value not found, returning NaN."); // log error
+        return std::numeric_limits<float>::quiet_NaN(); // return NaN on error;
+        }
 
-        ::LOG_INFO("OPCUAClientManager::extractFloatValue(): Value not found."); // log info
-        return 0.0f;  // Default to 0.0 if the value is not present
+    if (const opcua::Variant& variant = dataValue.value(); variant.isType<int16_t>()) {  // check if value is INT16
+        return static_cast<float>(variant.to<int>());    // convert INT16 to FLOAT
+    } else if (variant.isType<double>()) {     // check if value is DOUBLE
+        return static_cast<float>(variant.to<double>());  // convert DOUBLE to FLOAT
+    } else if (variant.isType<float>()) {  // check if value is FLOAT
+        return variant.to<float>();  // already a float
+    } else if (variant.isType<bool>()) {  // check if value is BOOL
+        return variant.to<bool>() ? 1.0f : 0.0f;  // convert BOOL to FLOAT (true → 1.0, false → 0.0)
     }
 
-    if (const opcua::Variant& variant = dataValue.value(); variant.isType<int16_t>()) {
-        return static_cast<float>(variant.to<int>());
-    } else if (variant.isType<double>()) {
-        return static_cast<float>(variant.to<double>());
-    } else if (variant.isType<float>()) {
-        return variant.to<float>();  // Already a float
-    } else if (variant.isType<bool>()) {
-        return variant.to<bool>() ? 1.0f : 0.0f;  // Convert bool to float (true → 1.0, false → 0.0)
-    }
-
-    return 0.0f;  // Default return if type is unsupported
+    ::LOG_ERROR("OPCUAClientManager::extractFloatValue(): Data type not found, returning NaN."); // log error
+    return std::numeric_limits<float>::quiet_NaN(); // return NaN;
 }
+
 
 // group data by table name to insert into DataBase
 void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes)
 {
     ::LOG_INFO("OPCUAClientManager::groupByTableName(): Grouping data by table name..."); // log info
 
-    for (const auto& [nodeId, data] : monitoredNodes) {
+    for (const auto& [nodeId, data] : monitoredNodes) {   // loop over monitoredNodes entries <string(nodeId),<int(objectID, string(tableName), DataValue)>>
 
-        int objectId = std::get<0>(data);    // Extract objectId
-        std::string tableName = std::get<1>(data);  // Extract tableName
-        cout << "Table name is: " << tableName << endl;
-        opcua::DataValue dataValue = std::get<2>(data);  // Extract DataValue
+        int objectId = std::get<0>(data);    // extract objectId
+        std::string tableName = std::get<1>(data);  // extract tableName
+        opcua::DataValue dataValue = std::get<2>(data);  // extract DataValue
 
-        const float value = extractFloatValue(dataValue); // Convert DataValue to float
+        const float value = extractFloatValue(dataValue); // convert DataValue to float
 
-        tableObjects[tableName][objectId] = value; // Overwrite value for objectId in the unordered_map
+        tableObjects[tableName][objectId] = value; // overwrite value for objectId in the unordered_map
     }
 }

@@ -33,7 +33,7 @@ bool OPCUAClientManager::connect() {
     ::LOG_INFO("OPCUAClientManager::connect(): Connecting to OPC UA server...");  // log info
 
     if (client.isConnected()) {  // check if already connected
-        //std::cerr << "Client is already connected!" << std::endl; (avoid printing and use logger)
+        std::cerr << "Client is already connected!" << std::endl; // (avoid printing and use logger)
         ::LOG_INFO("OPCUAClientManager::connect(): Client already connected.");  // log info
         return true;  // already connected, return success
     }
@@ -50,19 +50,20 @@ bool OPCUAClientManager::connect() {
 
         client.connect(endpointUrl);  // connect to OPC UA server
 
-        client.run();  // run server-client connection
+        std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl; // (avoid printing and use logger)
+        //client.run();  // run server-client connection
 
         ::LOG_INFO("OPCUAClientManager::connect(): OPCUA client connected and running.");  // log info
 
     } catch (const opcua::BadStatus& e) {  // catch error if connection failed
 
-        // cerr << "Failed to connect to OPC UA server: " << endl; (avoid printing and use logger)
+         cerr << "Failed to connect to OPC UA server: " << endl;  // (avoid printing and use logger)
         ::LOG_ERROR("OPCUAClientManager::connect(): Failed to connect to OPC UA server. - Exception: " + std::string(e.what())); // log error
         return false;
 
     }
 
-    // std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl; (avoid printing and use logger)
+     // std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl; // (avoid printing and use logger)
     ::LOG_INFO("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
 
     return true;
@@ -189,3 +190,77 @@ void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, 
         tableObjects[tableName][objectId] = value; // overwrite value for objectId in the unordered_map
     }
 }
+
+
+void OPCUAClientManager::setSubscription(
+    const double& subscriptionInterval,
+    const double& samplingInterval,
+    const std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>>& alarmNodes
+) {
+    if (alarmNodes.empty()) {
+        std::cerr << "[ERROR] alarmNodes is empty. No nodes to subscribe!" << std::endl;
+        return;
+    }
+
+    // Create the subscription asynchronously
+    opcua::services::createSubscriptionAsync(
+        client,  // client reference
+        opcua::SubscriptionParameters{subscriptionInterval},  // subscription parameters
+        true,  // enable publishing
+        {},
+        [](opcua::IntegerId subId) {
+            std::cout << "[INFO] Subscription deleted: " << subId << std::endl;
+        },  // delete callback
+
+        // Capture alarmNodes by value to ensure correct access inside the async callback
+        [this, alarmNodes, subscriptionInterval, samplingInterval](opcua::CreateSubscriptionResponse& response) {
+            if (!response.responseHeader().serviceResult().isGood()) {
+                std::cerr << "[ERROR] Failed to create subscription. Status: " << response.responseHeader().serviceResult() << std::endl;
+                return;
+            }
+
+            std::cout << "[INFO] Subscription created (ID: " << response.subscriptionId() << ")\n";
+
+            // Loop over the alarmNodes captured by value
+            for (const auto& alarm : alarmNodes) {
+                const opcua::NodeId& severityNode = std::get<0>(alarm);
+                const opcua::NodeId& ackNode = std::get<1>(alarm);
+                const opcua::NodeId& fixedNode = std::get<2>(alarm);
+
+                std::cout << "Severity Node: " << severityNode.toString() << std::endl;
+                std::cout << "Acknowledged Node: " << ackNode.toString() << std::endl;
+                std::cout << "Fixed Node: " << fixedNode.toString() << std::endl;
+
+                std::vector<opcua::NodeId> nodesToMonitor = {severityNode, ackNode, fixedNode};
+
+                // Create monitored items for each node in the nodesToMonitor vector
+                for (const auto& node : nodesToMonitor) {
+                    opcua::services::createMonitoredItemDataChangeAsync(
+                        client,
+                        response.subscriptionId(),
+                        opcua::ReadValueId(node, opcua::AttributeId::Value),
+                        opcua::MonitoringMode::Reporting,
+                        opcua::MonitoringParametersEx{.samplingInterval = samplingInterval, .queueSize = 10},
+                        [this, node](opcua::IntegerId, opcua::IntegerId, const opcua::DataValue& dv) {
+                            std::cout << "Node " << node.toString() << " has changed its value." << std::endl;
+                            // Optionally, store the new value or set a flag for processing
+                        },
+                        {},
+                        [](opcua::MonitoredItemCreateResult& result) {
+                            if (!result.statusCode().isGood()) {
+                                std::cerr << "[ERROR] Failed to create monitored item. Status: "
+                                          << result.statusCode() << std::endl;
+                            } else {
+                                std::cout << "[INFO] MonitoredItem created (ID: "
+                                          << result.monitoredItemId() << ")\n";
+                            }
+                        }
+                    );
+                }
+            }
+        }
+    );
+}
+
+
+

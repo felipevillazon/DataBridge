@@ -71,12 +71,12 @@ bool SQLClientManager::connect() {
         SQLGetDiagRec(SQL_HANDLE_DBC, sqlConnHandle, 1, sqlState, &nativeError, errorMsg, sizeof(errorMsg), &textLen);
         LOG_ERROR("SQLClientManager::connect(): SQLGetDiagRec failed. SQL State: " + std::string(reinterpret_cast<char*>(sqlState)) +
           ", Message: " + std::string(reinterpret_cast<char*>(errorMsg)));   // log error
-        // std::cerr << "Connection failed. SQL State: " << sqlState << ", Message: " << errorMsg << std::endl; // (avoid print and use logger)
+        //std::cerr << "Connection failed. SQL State: " << sqlState << ", Message: " << errorMsg << std::endl; // (avoid print and use logger)
         return false;
     }
 
     LOG_INFO("SQLClientManager::connect(): Successfully connected to database.");  // log info
-    // std::cout << "Database connection established successfully!" << std::endl;  //  (avoid print and use logger)
+    //std::cout << "Database connection established successfully!" << std::endl;  //  (avoid print and use logger)
     return true;
 
 }
@@ -159,7 +159,7 @@ bool SQLClientManager::executeQuery(const string& query) {
 
 
 // create SQL database tables from external file
- void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
+void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
 
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting to build SQL database schema...");  // log info
     FileManager fileManager;
@@ -169,16 +169,14 @@ bool SQLClientManager::executeQuery(const string& query) {
     if (fileManager.configData.empty()) {
 
         LOG_ERROR("SQLClientManager::createDatabaseSchema(): Loading JSON file failed.");  // log error
-        // cerr << "Failed to load schema file!" << endl; // (avoid print and use logger)
         return;
     }
 
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file successfully.");  // log info
-    // cout << "Starting database schema creation..." << endl; // (avoid print and use logger)
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting database schema creation...");  // log info
 
-    // start a transaction
-    executeQuery("BEGIN TRANSACTION;");  // begin sql transaction
+    // Start a transaction (MySQL syntax)
+    executeQuery("START TRANSACTION;");  // start SQL transaction
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting SQL transaction...");  // log info
 
     bool success = true;  // flag to track execution success
@@ -186,8 +184,7 @@ bool SQLClientManager::executeQuery(const string& query) {
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Start iteration over tables, checking if tables already exist, if not, creating it..."); // log info
     for (const auto& table : fileManager.configData["tables"].items()) {
         const string& tableName = table.key();
-        string createTableSQL = "IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '" + tableName + "') BEGIN\n";
-        createTableSQL += "    CREATE TABLE " + tableName + " (\n";
+        string createTableSQL = "CREATE TABLE IF NOT EXISTS " + tableName + " (\n";
 
         bool firstColumn = true;
         for (const auto& column : table.value()["columns"].items()) {
@@ -199,22 +196,22 @@ bool SQLClientManager::executeQuery(const string& query) {
             const string& columnName = column.key();
             string columnType = column.value()["type"];
 
-            // fix invalid types
-            if (columnType == "TEXT") columnType = "NVARCHAR(255)";  // TEXT is deprecated, use NVARCHAR(255)
-            if (columnType == "DOUBLE") columnType = "FLOAT";         // DOUBLE does not exist, use FLOAT
+            // fix invalid types for MySQL
+            if (columnType == "TEXT") columnType = "VARCHAR(255)";  // use VARCHAR(255) for MySQL
+            if (columnType == "DOUBLE") columnType = "FLOAT";      // use FLOAT for MySQL
 
             const bool isPrimaryKey = column.value().contains("primary_key") && column.value()["primary_key"];
             const bool isAutoIncrement = column.value().contains("auto_increment") && column.value()["auto_increment"];
             const bool isNullable = column.value().contains("nullable") ? column.value()["nullable"].get<bool>() : true;
             string defaultValue = column.value().contains("default") ? column.value()["default"].get<string>() : "";
 
-            // build column definition
+            // Build column definition
             createTableSQL += "    " + columnName + " " + columnType;
             if (isPrimaryKey) {
                 createTableSQL += " PRIMARY KEY";
             }
             if (isAutoIncrement) {
-                createTableSQL += " IDENTITY(1,1)";  // auto-increment for SQL Server
+                createTableSQL += " AUTO_INCREMENT";  // use AUTO_INCREMENT for MySQL
             }
             if (!isNullable) {
                 createTableSQL += " NOT NULL";
@@ -224,7 +221,7 @@ bool SQLClientManager::executeQuery(const string& query) {
             }
         }
 
-        // handle foreign keys
+        // Handle foreign keys
         if (table.value().contains("foreign_keys")) {
             for (const auto& fk : table.value()["foreign_keys"]) {
                 createTableSQL += ",\n    FOREIGN KEY (" + fk["column"].get<string>() + ") REFERENCES " +
@@ -233,14 +230,11 @@ bool SQLClientManager::executeQuery(const string& query) {
             }
         }
 
-        createTableSQL += "\n);\nEND;";
+        createTableSQL += "\n);";
 
-        // cout << "Executing: " << createTableSQL << endl; // (avoid printing and use logger)
-
-        // execute SQL to create table
+        // Execute SQL to create table
         if (!executeQuery(createTableSQL)) {
             LOG_ERROR("SQLClientManager::createDatabaseSchema(): Failed to create table.");  // log error
-            // cerr << "Failed to create table: " << tableName << ". Rolling back transaction." << endl; // (avoid printing and use logger)
             LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");  // log info
             success = false;
             break;  // Stop execution if one query fails
@@ -250,16 +244,15 @@ bool SQLClientManager::executeQuery(const string& query) {
     // Commit or rollback based on success status
     if (success) {
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Commit transaction.");  // log info
-        executeQuery("COMMIT TRANSACTION;");
-        // cout << "Database schema created successfully!" << endl; // (avoid printing and use logger)
+        executeQuery("COMMIT;");
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Database schema created successfully.");  // log info
     } else {
-        executeQuery("ROLLBACK TRANSACTION;");
+        executeQuery("ROLLBACK;");
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");  // log info
-        // cerr << "Transaction rolled back due to errors!" << endl; // (avoid printing and use logger)
         LOG_ERROR("SQLClientManager::createDatabaseSchema(): Transaction rolled back due to errors.");  // log error
     }
 }
+
 
 
 // prepare insert statements for SQL query
@@ -303,9 +296,9 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
     LOG_INFO("SQLClientManager::insertBatchData(): Inserting batch data...");  // log info
     try {
         // start transaction with BEGIN TRANSACTION
-        LOG_INFO("SQLClientManager::insertBatchData(): Begin transaction.");  // log info
+        LOG_INFO("SQLClientManager::insertBatchData(): START transaction.");  // log info
 
-        if (const std::string beginTransaction = "BEGIN TRANSACTION;"; !executeQuery(beginTransaction)) {
+        if (const std::string beginTransaction = "START TRANSACTION;"; !executeQuery(beginTransaction)) {
             LOG_ERROR("SQLClientManager::insertBatchData(): Failed to begin transaction.");  // log error
             // std::cerr << "Failed to start transaction" << std::endl; // (avoid printing and use logger)
             return false;

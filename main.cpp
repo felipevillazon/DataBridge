@@ -39,6 +39,7 @@ void loadCredentials(FileManager& fileManager, std::vector<std::string>& sql_cre
 // Function to connect to SQL server with retry mechanism
 bool connectToSQL(SQLClientManager& sql_client_manager) {
     while (!sql_client_manager.connect() && keepRunning) {
+
         std::cout << "SQL connection failed. Retrying in 1 second...\n";
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
@@ -74,17 +75,29 @@ void initialize() {
         const std::string sql_string = helper.setSQLString(sql_credentials);
         SQLClientManager sql_client_manager(sql_string);
 
+        cout << sql_string << endl;
         if (!connectToSQL(sql_client_manager)) return;
 
-        const std::string databaseSchemeFile = "/home/felipevillazon/Xelips/dbSchema.JSON";
+
+        //const std::string databaseSchemeFile = "/home/felipevillazon/Xelips/dbSchema.JSON";
         //sql_client_manager.createDatabaseSchema(databaseSchemeFile);
 
+        cout << "endpointUrl is:  " << opcua_credentials.at(0) << endl;
         OPCUAClientManager opcua_client_manager(opcua_credentials.at(0), opcua_credentials.at(1), opcua_credentials.at(2));
+        //OPCUAClientManager opcua_client_manager_2("opc.tcp://192.168.1.200:4840", opcua_credentials.at(1), opcua_credentials.at(2));
+        //opcua_client_manager.connect();
+        //opcua_client_manager_2.connect();
+
+        auto node_severity = NodeId(4,2);
+        auto node_ack = NodeId(4,3);
+        auto node_fixed = NodeId(4,4);
 
 
-        const std::string staticInformationFile = "/home/felipevillazon/test.JSON";
-        file_manager.loadFile(staticInformationFile);
-        auto mappedData = file_manager.mapNodeIdToObjectId();
+
+
+        // const std::string staticInformationFile = "/home/felipevillazon/test.JSON";
+        // file_manager.loadFile(staticInformationFile);
+        // auto mappedData = file_manager.mapNodeIdToObjectId();
 
         const std::chrono::seconds interval(2); // Read every 2 seconds
 
@@ -97,19 +110,18 @@ void initialize() {
               auto startTime = std::chrono::high_resolution_clock::now();
 
               // opcua server-client interaction
-              opcua_client_manager.pollNodeValues(mappedData);   // poll values from all mapped node ids
-              opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes);  // group data and prepared it for sql database
+              //opcua_client_manager.pollNodeValues(mappedData);   // poll values from all mapped node ids
+              //opcua_client_manager.groupByTableName(opcua_client_manager.monitoredNodes);  // group data and prepared it for sql database
 
               // sql server-client interaction
-              sql_client_manager.prepareInsertStatements(opcua_client_manager.tableObjects);   // prepare insert statements for sql database
-              sql_client_manager.insertBatchData(opcua_client_manager.tableObjects);    // insert batch data into tables, all at once
-
+              //sql_client_manager.prepareInsertStatements(opcua_client_manager.tableObjects);   // prepare insert statements for sql database
+              //sql_client_manager.insertBatchData(opcua_client_manager.tableObjects);    // insert batch data into tables, all at once
 
               // End measuring time
               auto endTime = std::chrono::high_resolution_clock::now();
               auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);  // Use microseconds for higher precision
 
-              std::cout << "Execution time for pollNodeValues: " << duration.count() << " µs\n";  // µs for microseconds
+              //std::cout << "Execution time for pollNodeValues: " << duration.count() << " µs\n";  // µs for microseconds
 
               // Calculate remaining time to sleep to maintain 1 second frequency
               const int executionTime = duration.count();  // Time taken by pollNodeValues in microseconds
@@ -117,12 +129,17 @@ void initialize() {
 
 
               // Print how much time we sleep
-              std::cout << "Sleeping for: " << sleepTime / 1000 << " ms\n";  // Convert sleep time to milliseconds for clarity
+              //std::cout << "Sleeping for: " << sleepTime / 1000 << " ms\n";  // Convert sleep time to milliseconds for clarity
 
               // Sleep for the remaining time to complete 1-second cycle
               std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
           }
       }).detach();  // Detach thread to run independently
+
+            const std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarm = {
+std::make_tuple(opcua::NodeId(4,2), opcua::NodeId(4,3), opcua::NodeId(4,4))
+};
+ opcua_client_manager.setSubscription(100, 100, alarm);
   });
 
 

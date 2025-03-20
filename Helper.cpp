@@ -34,8 +34,8 @@ string Helper::setSQLString(const vector<string>& credentialsSQL) {
     databasename = credentialsSQL[5];   // retrieve databasename
 
     // Constructing the connection string
-    sqlString = "Driver={ODBC Driver 18 for SQL Server};Server=" + servername + ";Database=" + databasename +
-                              ";Uid=" + username + ";Pwd=" + password + ";TrustServerCertificate=yes;";
+    sqlString = "Driver={MySQL ODBC 9.2 Unicode Driver};Server=" + servername + ";Database=" + databasename +
+                ";User=" + username + ";Password=" + password + ";Option=3;";
 
     LOG_INFO("DataProcessor::setSQLString(): SQL connection string built successfully."); // log info
     return sqlString;  // return sql string

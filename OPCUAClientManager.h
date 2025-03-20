@@ -49,6 +49,9 @@ public:
     // stores monitored data and group by table name <tableName, <objectId, value [[float type only]]>>
     std::unordered_map<std::string,  std::unordered_map<int, float>> tableObjects;
 
+    // subscribe to node ids
+    void setSubscription(const double& subscriptionInterval,const double& samplingInterval, const std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>>& alarmNodes);
+
 
 private:
 
@@ -63,6 +66,8 @@ private:
 
     // One mutex per node
     std::unordered_map<std::string, std::mutex> nodeLocks;
+
+    opcua::NodeId severityNode, ackNode, fixedNode;
 
 };
 

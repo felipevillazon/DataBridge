@@ -191,7 +191,7 @@ void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, 
     }
 }
 
-
+// create and set subscription of alarm events
 void OPCUAClientManager::setSubscription(
     const double& subscriptionInterval,
     const double& samplingInterval,
@@ -223,9 +223,9 @@ void OPCUAClientManager::setSubscription(
 
             // Loop over the alarmNodes captured by value
             for (const auto& alarm : alarmNodes) {
-                const opcua::NodeId& severityNode = std::get<0>(alarm);
-                const opcua::NodeId& ackNode = std::get<1>(alarm);
-                const opcua::NodeId& fixedNode = std::get<2>(alarm);
+                severityNode = std::get<0>(alarm);
+                ackNode = std::get<1>(alarm);
+                fixedNode = std::get<2>(alarm);
 
                 std::cout << "Severity Node: " << severityNode.toString() << std::endl;
                 std::cout << "Acknowledged Node: " << ackNode.toString() << std::endl;
@@ -243,7 +243,15 @@ void OPCUAClientManager::setSubscription(
                         opcua::MonitoringParametersEx{.samplingInterval = samplingInterval, .queueSize = 10},
                         [this, node](opcua::IntegerId, opcua::IntegerId, const opcua::DataValue& dv) {
                             std::cout << "Node " << node.toString() << " has changed its value." << std::endl;
+
+                            if (dv.hasValue()) {
+    std::cout << "New Value: " << dv.value().to<int16_t>() << std::endl;
+}
+                            //cout << "Identifier is:" << node.identifier<uint32_t>() +100 << endl;
                             // Optionally, store the new value or set a flag for processing
+                            dataChangeCallback(node, dv);
+
+
                         },
                         {},
                         [](opcua::MonitoredItemCreateResult& result) {
@@ -262,5 +270,158 @@ void OPCUAClientManager::setSubscription(
     );
 }
 
+// handle severity change
+void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const int16_t newSeverity) {
 
+    const auto it = activeAlarms.find(node); // try to find if alarm is activate by checking if severity node id is there
 
+    if (newSeverity == 0) {      // check if value is equal to 0
+
+        cout << "SEVERITY value returned to 0, FIXED flag will take care of it." << endl;
+    }
+
+    if (it == activeAlarms.end()) {  // check if node is not in activeAlarms
+        // new Alarm Detected
+
+        cout << "New alarm detected" << endl;
+        const int eventId = Helper::generateEventId("/home/felipevillazon/Xelips/alarmEventID.txt"); // generate unique event ID
+        std::cout << "[INFO] New alarm detected. Event ID: " << eventId << std::endl;
+
+        // Poll additional values from the server
+        //auto additionalData = pollAdditionalNodes(node);  // get alarm-related values from opcua server
+
+        pollAlarmNodes(node);
+
+        // Insert new alarm record in the database
+        //insertIntoDatabase(eventId, "New Alarm", newSeverity, additionalData);   // insert into database in its corresponding table
+
+        // store alarm details
+        activeAlarms[node] = {eventId, newSeverity, false, false};  // record new alarm into activeAlarms
+    } else {
+        // existing alarm - update severity
+        std::cout << "[INFO] Updating alarm severity for event ID: " << it->second.eventId << std::endl;
+        pollAlarmNodes(node);
+        //insertIntoDatabase(it->second.eventId, "Updated Severity", newSeverity);  // insert new column into database
+        it->second.severity = newSeverity; // update severity from activeAlarms
+    }
+}
+
+// handle acknowledged flag
+void OPCUAClientManager::handleAckChange(const opcua::NodeId& node, const bool isAcknowledged) {
+
+    const auto it = activeAlarms.find(node);  // check if node is inside activeAlarms
+    if (it != activeAlarms.end() && isAcknowledged) {  // if node is indeed a key of activeAlarms
+        std::cout << "[INFO] Alarm acknowledged for event ID: " << it->second.eventId << std::endl;
+        //insertIntoDatabase(it->second.eventId, "Acknowledged", it->second.severity);  // set acknowledged timestamp
+        it->second.acknowledged = true;   // turn to true flag from activeAlarm struct
+    }
+}
+
+// handle fixed flag
+void OPCUAClientManager::handleFixedChange(const opcua::NodeId& node, const bool isFixed) {
+    const auto it = activeAlarms.find(node); // check if node is inside activeAlarms
+    if (it != activeAlarms.end() && isFixed) { // if node is indeed a key of activeAlarms
+        std::cout << "[INFO] Alarm fixed for event ID: " << it->second.eventId << std::endl;
+        //insertIntoDatabase(it->second.eventId, "Fixed", it->second.severity);  // set fixed timestamp
+        it->second.fixed = true;  // turn to true flag from activeAlarm struct
+
+        activeAlarms.erase(it);  // delete current alarm event from activeAlarms
+    }
+}
+
+void OPCUAClientManager::pollAlarmNodes(const NodeId& node) {
+    constexpr int numRelatedVariables = 5;  // Adjust based on OPC UA structure
+
+    // Extract namespace index and identifier
+    const int namespaceIndex = node.namespaceIndex();
+    const uint32_t baseIdentifier = node.identifier<uint32_t>();
+
+    // Map to store alarm values
+
+    for (int i = 0; i <= numRelatedVariables; ++i) {
+        opcua::NodeId relatedNode(namespaceIndex, baseIdentifier + i);
+        std::string nodeIdStr = relatedNode.toString();
+
+        opcua::services::readValueAsync(
+            client, relatedNode,
+            [this, relatedNode,i](opcua::Result<opcua::Variant>& result) { // Capture `alarmValues` by reference
+
+                if (result.hasValue()) {
+                    try {
+
+                        const opcua::DataValue dataValue(result.value());
+                        const opcua::Variant& variantValue = dataValue.value();
+
+                        int16_t severity = 0, stateId = 0, subsystemId = 0, objectId = 0, errorCode = 0;
+                        float value = 0.0f;
+
+                        // assuming the variables are read sequentially
+                        switch (i) { // Distribute values based on ID
+                            case 0: severity = variantValue.to<int16_t>();
+                            cout << "severity: " << severity << endl;
+                            break;
+                            case 1: stateId = variantValue.to<int16_t>();
+                            cout << "stateId: " << stateId << endl;
+                            break;
+                            case 2: subsystemId = variantValue.to<int16_t>();
+                            cout << "subsystemId: " << subsystemId << endl;
+                            break;
+                            case 3: objectId = variantValue.to<int16_t>();
+                            cout << "objectId: " << objectId << endl;
+                            break;
+                            case 4: value = variantValue.to<float>();
+                            cout << "value: " << value << endl;
+                            break;
+                            case 5: errorCode = variantValue.to<int16_t>();
+                            cout << "errorCode: " << errorCode << endl;
+                            break;
+                            default: ;
+                        }
+
+                        // Store in the map (modify existing or insert)
+                        if (alarmValues.contains(relatedNode)) {
+                            auto& entry = alarmValues[relatedNode];
+                            entry = std::make_tuple(severity, stateId, subsystemId, objectId, value, errorCode);
+                        } else {
+                            alarmValues[relatedNode] = std::make_tuple(severity, stateId, subsystemId, objectId, value, errorCode);
+                        }
+
+                    } catch (const std::exception& e) {
+                        std::cerr << "[ERROR] OPCUAClientManager::pollNodeValues() - Exception: " << e.what() << std::endl;
+                    }
+                } else {
+                    std::cerr << "[ERROR] No value found for node: " << relatedNode.toString() << std::endl;
+                }
+            }
+        );
+    }
+
+}
+
+void OPCUAClientManager::dataChangeCallback(const opcua::NodeId& node, const opcua::DataValue& dv) {
+
+    if (!dv.hasValue()) {
+
+        cout << "No data found for node: " << node.toString() << std::endl;
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(sqlMutex);
+
+    try {
+        if (node == severityNode) {
+
+            std::cout << "[INFO] Node: " << node.toString() << "is the severity node" << std::endl;
+            handleSeverityChange(node,dv.value().to<int16_t>() );
+        } else if (node == ackNode) {
+
+            std::cout << "[INFO] Node: " << node.toString() << "is the ack node" << std::endl;
+            handleAckChange(node, dv.value().data());
+        } else if (node == fixedNode) {
+            std::cout << "[INFO] Node: " << node.toString() << "is the fixed node" << std::endl;
+            handleFixedChange(node, dv.value().data());
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[ERROR] Exception extracting data: " << e.what() << std::endl;
+    }
+}

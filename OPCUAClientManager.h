@@ -49,9 +49,26 @@ public:
     // stores monitored data and group by table name <tableName, <objectId, value [[float type only]]>>
     std::unordered_map<std::string,  std::unordered_map<int, float>> tableObjects;
 
-    // subscribe to node ids
+    // create and set subscription of alarm events
     void setSubscription(const double& subscriptionInterval,const double& samplingInterval, const std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>>& alarmNodes);
 
+    // handle severity change
+    void handleSeverityChange(const opcua::NodeId& node, int16_t newSeverity);
+
+    // handle acknowledged flag
+    void handleAckChange(const opcua::NodeId& node, bool isAcknowledged);
+
+    // handle fixed flag
+    void handleFixedChange(const opcua::NodeId& node, bool isFixed);
+
+    // poll alarm-related data from OPCUA server
+    void pollAlarmNodes(const NodeId &node);
+
+    // callback method for subscription
+    void dataChangeCallback(const opcua::NodeId &node, const opcua::DataValue &dv);
+
+    // store values polled from OPC UA server alarm-related information
+    std::unordered_map<NodeId, std::tuple<int, int, int, int, float, int>> alarmValues;
 
 private:
 
@@ -68,6 +85,20 @@ private:
     std::unordered_map<std::string, std::mutex> nodeLocks;
 
     opcua::NodeId severityNode, ackNode, fixedNode;
+
+    // customized structure for alarm information
+    struct AlarmEvent {
+        int eventId;       // unique event ID for the alarm occurrence
+        int16_t severity;      // last known severity level
+        bool acknowledged; // has it been acknowledged?
+        bool fixed;        // has it been fixed?
+    };
+
+    // store active alarms
+    std::unordered_map<opcua::NodeId, AlarmEvent> activeAlarms;
+
+    // Mutex for thread safety when accessing the database
+    std::mutex sqlMutex;
 
 };
 

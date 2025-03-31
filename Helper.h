@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <fstream>
 
 using namespace std;
 
@@ -21,6 +22,7 @@ public:
 
     string setSQLString(const vector<string>& credentialsSQL); // set sql string from input credentials placed in a vector
     static std::array<int, 2> getNodeIdInfo(const string& nodeId);  // from nodeId string get nameSpaceIndex and identifier
+    static int generateEventId(const std::string& filename);  // generated unique event id for alarm events
 
 private:
 

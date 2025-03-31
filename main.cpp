@@ -187,6 +187,10 @@ opcua_client_manager_2.setSubscription(100, 100, alarm);
 
 void initialize() {
     try {
+
+        unsigned int n_threads = std::thread::hardware_concurrency();
+        std::cout << "Recommended threads: " << n_threads << std::endl;
+
         setupLogger();
 
         FileManager file_manager;
@@ -226,7 +230,7 @@ void initialize() {
 
             // Subscribe to alarms
             std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarm = {
-                std::make_tuple(opcua::NodeId(4,2), opcua::NodeId(4,3), opcua::NodeId(4,4))
+                std::make_tuple(opcua::NodeId(4,5), opcua::NodeId(4,6), opcua::NodeId(4,7))
             };
             opcua_client_manager.setSubscription(100, 100, alarm);
         });
@@ -235,7 +239,7 @@ void initialize() {
             std::cout << "[INFO] Session activated for PLC 2" << std::endl;
 
             std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarm = {
-                std::make_tuple(opcua::NodeId(4,2), opcua::NodeId(4,3), opcua::NodeId(4,4))
+                std::make_tuple(opcua::NodeId(4,5), opcua::NodeId(4,6), opcua::NodeId(4,7))
             };
             opcua_client_manager_2.setSubscription(100, 100, alarm);
         });

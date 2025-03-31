@@ -63,4 +63,26 @@ std::array<int, 2> Helper::getNodeIdInfo(const string& nodeId) {
     return {ns, id};
 }
 
+// generated unique event id for alarm events
+int Helper::generateEventId(const std::string &filename) {
+
+    int lastID = 0;  // initialize lastID variable
+
+    // read the last event_id from the file
+    if (std::ifstream infile(filename); infile.is_open()) {
+        infile >> lastID;  // read the stored ID
+        infile.close();
+    }
+
+    // increment the ID
+    int newID = lastID + 1;  // update last event id
+
+    // save the new ID back to the file
+    if (std::ofstream outfile(filename); outfile.is_open()) {
+        outfile << newID;
+        outfile.close();
+    }
+
+    return newID;  // return new event id
+}
 

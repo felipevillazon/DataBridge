@@ -13,7 +13,8 @@
 #include <sqltypes.h>
 #include <unordered_map>
 #include <vector>
-
+#include <open62541pp/client.hpp>
+#include <open62541pp/open62541pp.h>
 
 using namespace std;
 
@@ -26,10 +27,10 @@ public:
     bool connect();   // connect to database
     void disconnect(); // disconnect from database
     void createDatabaseSchema(const string& schemaFile); // create database tables from file with JSON format
-    //void insertAlarm(const string& table, const string& alarm);  // insert alarm into table Alarms
     bool executeQuery(const string& query); // execute query using string queries
     void prepareInsertStatements(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects); // prepare insert statements
     bool insertBatchData(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects); // insert batch data into tables
+    void insertAlarm(const string& table, const unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values, const string &type);  // insert alarm into table Alarms
 
 private:
     SQLHANDLE sqlEnvHandle; // environment handle

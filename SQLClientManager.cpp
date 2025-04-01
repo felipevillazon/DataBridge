@@ -375,4 +375,49 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
 
 
 // insert alarm data into Alarm table
-//void SQLClientManager::insertAlarm(const string &table, const string &alarm) {}
+void SQLClientManager::insertAlarm(
+    const string &table,
+    const unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values,
+    const string &type)
+{
+    std::ostringstream queryStream;
+
+    // Base insert statement
+    queryStream << "INSERT INTO " << table
+                << " (severity, event_id, state_id, subsystem_id, object_id, object_value, error_code";
+
+    // Conditionally add timestamp columns based on `type`
+    if (type == "ACKNOWLEDGED") {
+        queryStream << ", ack_timestamp";
+    } else if (type == "FIXED") {
+        queryStream << ", fixed_timestamp";
+    }
+
+    queryStream << ") VALUES (?, ?, ?, ?, ?, ?, ?";
+
+    // Add corresponding values for timestamps
+    if (type == "ACKNOWLEDGED") {
+        queryStream << ", NOW()";  // Fill ack_timestamp
+    } else if (type == "FIXED") {
+        queryStream << ", NOW()";  // Fill fixed_timestamp
+    }
+
+    queryStream << ")";
+
+    std::string query = queryStream.str();
+
+    // Log the query for debugging
+    std::cout << "Executing Query: " << query << std::endl;
+
+    // Assume you have a function executeQuery that takes the query and executes it with the given values
+    for (const auto& [nodeId, data] : values) {
+        int severity, event_id, state_id, subsystem_id, object_id, error_code;
+        float object_value;
+
+        std::tie(severity, event_id, state_id, subsystem_id, object_id, object_value, error_code) = data;
+
+        // Execute the query with these values
+        executeQuery(query, severity, event_id, state_id, subsystem_id, object_id, object_value, error_code);
+    }
+}
+

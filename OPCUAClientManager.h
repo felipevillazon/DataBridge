@@ -67,8 +67,14 @@ public:
     // callback method for subscription
     void dataChangeCallback(const opcua::NodeId &node, const opcua::DataValue &dv);
 
-    // store values polled from OPC UA server alarm-related information
+    // store values polled from OPC UA server alarm-related information: SEVERITY, STATE_ID, SUBSYSTEM_ID, OBJECT_ID, VALUE, ERROR_CODE
     std::unordered_map<NodeId, std::tuple<int, int, int, int, float, int>> alarmValues;
+
+    // store values inserted into database : SEVERITY, EVENT_ID, STATE_ID, SUBSYSTEM_ID, OBJECT_ID, VALUE, ERROR_CODE
+    std::unordered_map<NodeId, std::tuple<int, int, int, int, int, float, int>> alarmDataBaseValues;
+
+    // prepare alarm data to insert into database
+    void prepareAlarmDataBaseData(const opcua::NodeId& node);
 
 private:
 
@@ -88,13 +94,13 @@ private:
 
     // customized structure for alarm information
     struct AlarmEvent {
-        int eventId;       // unique event ID for the alarm occurrence
-        int16_t severity;      // last known severity level
-        bool acknowledged; // has it been acknowledged?
-        bool fixed;        // has it been fixed?
+        int eventId;        // unique event ID for the alarm occurrence
+        int16_t severity;   // last known severity level
+        bool acknowledged;  // has it been acknowledged?
+        bool fixed;         // has it been fixed?
     };
 
-    // store active alarms
+    // store active alarms  SEVERITY NODE_ID, AlarmEvent
     std::unordered_map<opcua::NodeId, AlarmEvent> activeAlarms;
 
     // Mutex for thread safety when accessing the database

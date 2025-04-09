@@ -94,12 +94,13 @@ void OPCUAClientManager::disconnect() {
 }
 
 
-// poll values from node ids asynchronously
+// poll values from node ids asynchronously  input: <object_node_id, object_id, table_name>
 void OPCUAClientManager::pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap) {
 
 
     ::LOG_INFO("OPCUAClientManager::pollNodeValues(): Starting polling values from nodes..."); // log info
 
+    // loop over object_node_id while nodeInfo holds object_id and table_name
     for (const auto& [nodeIdStr, nodeInfo] : nodeMap) {   // loop over all mapped nodeIds
 
         ::LOG_INFO("OPCUAClientManager::pollNodeValues(): Retrieving nameSpaceIndex and Identifier from nodeID..."); // log info
@@ -133,7 +134,7 @@ void OPCUAClientManager::pollNodeValues(const std::unordered_map<std::string, st
 
                     } catch (const std::exception& e) {   // catch any error
 
-                        ::LOG_ERROR("OPCUAClientManager::pollNodeValues(): Error processing value for nodeId: " + nodeIdStr + " - Exception: " + std::string(e.what())); // log error
+                        ::LOG_ERROR("OPCUAClientManager::pollNodeValues(): Error processing value for nodeId: " + nodeIdStr + ". object_id is: " + "objectID" + " - Exception: " + std::string(e.what())); // log error
 
                         // cerr << "Error processing value for " << nodeIdStr << ": " << e.what() << endl; // print not needed, slow down process
                     }
@@ -149,8 +150,13 @@ void OPCUAClientManager::pollNodeValues(const std::unordered_map<std::string, st
 }
 
 
-// convert DataValue to float
+// convert DataValue to float for object_values column in database
 float extractFloatValue(const opcua::DataValue& dataValue) {
+
+    // independently of the data type of the incoming object, we convert it to float to not have split data
+    // by data type in different tables in the database. It should not cause any problems since INT are
+    // represented as 1 -> 1.0, doubles/floats remains the same and bools true -> 1.0 and false 0.0
+    // string data type is no send to the database so we do not have conflicts there.
 
     ::LOG_INFO("OPCUAClientManager::extractFloatValue(): Converting opcua::DataValue to float..."); // log info
 
@@ -174,7 +180,7 @@ float extractFloatValue(const opcua::DataValue& dataValue) {
 }
 
 
-// group data by table name to insert into DataBase
+// group data by table name to insert into DataBase: input object -> <object_node_id, <object_id, table_name, value>>
 void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes)
 {
     ::LOG_INFO("OPCUAClientManager::groupByTableName(): Grouping data by table name..."); // log info
@@ -190,6 +196,7 @@ void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, 
         tableObjects[tableName][objectId] = value; // overwrite value for objectId in the unordered_map
     }
 }
+
 
 // create and set subscription of alarm events
 void OPCUAClientManager::setSubscription(
@@ -266,6 +273,7 @@ void OPCUAClientManager::setSubscription(
     );
 }
 
+
 // handle severity change
 void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const int16_t newSeverity) {
 
@@ -282,7 +290,7 @@ void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const i
         //cout << "New alarm detected" << endl;
         const int eventId = Helper::generateEventId("/home/felipevillazon/Xelips/alarmEventID.txt"); // generate unique event ID
         std::cout << "[INFO] New alarm detected. Event ID: " << eventId << std::endl;
-
+        prepareAlarmDataBaseData(node);
         // Poll additional values from the server
         //auto additionalData = pollAdditionalNodes(node);  // get alarm-related values from opcua server
 
@@ -297,10 +305,12 @@ void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const i
         // existing alarm - update severity
         //std::cout << "[INFO] Updating alarm severity for event ID: " << it->second.eventId << std::endl;
         pollAlarmNodes(node);
+        prepareAlarmDataBaseData(node);
         //insertIntoDatabase(it->second.eventId, "Updated Severity", newSeverity);  // insert new column into database
         it->second.severity = newSeverity; // update severity from activeAlarm
     }
 }
+
 
 // handle acknowledged flag
 void OPCUAClientManager::handleAckChange(const opcua::NodeId& node, const bool isAcknowledged) {
@@ -317,11 +327,12 @@ void OPCUAClientManager::handleAckChange(const opcua::NodeId& node, const bool i
     if (it != activeAlarms.end() && isAcknowledged) {  // if node is indeed a key of activeAlarms and acknowledge value is true
         std::cout << "[INFO] Alarm acknowledged for event ID: " << it->second.eventId << std::endl;
         pollAlarmNodes(relatedSeverityNode);
-
+        prepareAlarmDataBaseData(relatedSeverityNode);
         //insertIntoDatabase(it->second.eventId, "Acknowledged", it->second.severity);  // set acknowledged timestamp
         it->second.acknowledged = true;   // turn to true flag from activeAlarm struct
     }
 }
+
 
 // handle fixed flag
 void OPCUAClientManager::handleFixedChange(const opcua::NodeId& node, const bool isFixed) {
@@ -337,6 +348,7 @@ void OPCUAClientManager::handleFixedChange(const opcua::NodeId& node, const bool
     if (it != activeAlarms.end() && isFixed) { // if node is indeed a key of activeAlarms
         std::cout << "[INFO] Alarm fixed for event ID: " << it->second.eventId << std::endl;
         pollAlarmNodes(relatedSeverityNode);
+        prepareAlarmDataBaseData(relatedSeverityNode);
         //insertIntoDatabase(it->second.eventId, "Fixed", it->second.severity);  // set fixed timestamp
         it->second.fixed = true;  // turn to true flag from activeAlarm struct
 
@@ -345,6 +357,7 @@ void OPCUAClientManager::handleFixedChange(const opcua::NodeId& node, const bool
         alarmDataBaseValues.erase(relatedSeverityNode);  // delete database values from current alarm event from alarmDataBaseValues
     }
 }
+
 
 // poll alarm-related values from OPC UA server
 void OPCUAClientManager::pollAlarmNodes(const NodeId& node) {
@@ -416,6 +429,7 @@ void OPCUAClientManager::pollAlarmNodes(const NodeId& node) {
     }
 
 }
+
 
 // callback method for opc ua subscription of alarm info
 void OPCUAClientManager::dataChangeCallback(const opcua::NodeId& node, const opcua::DataValue& dv) {

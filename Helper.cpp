@@ -34,8 +34,9 @@ string Helper::setSQLString(const vector<string>& credentialsSQL) {
     databasename = credentialsSQL[5];   // retrieve databasename
 
     // Constructing the connection string
-    sqlString = "Driver={MySQL ODBC 9.2 Unicode Driver};Server=" + servername + ";Database=" + databasename +
-                ";User=" + username + ";Password=" + password + ";Option=3;";
+    sqlString = "Driver={MariaDB ODBC 3.2 Driver};Server=" + servername + ";Database=" + databasename +
+               ";User=" + username + ";Password=" + password + ";PORT=3306;";
+
 
     LOG_INFO("DataProcessor::setSQLString(): SQL connection string built successfully."); // log info
     return sqlString;  // return sql string

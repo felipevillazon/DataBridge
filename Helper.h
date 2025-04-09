@@ -11,6 +11,8 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <array>
+
 
 using namespace std;
 

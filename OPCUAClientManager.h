@@ -12,7 +12,7 @@
 #include <open62541pp/open62541pp.h>
 #include <chrono>
 #include <queue>
-
+#include "SQLClientManager.h"
 
 using namespace std;
 using namespace opcua;
@@ -38,6 +38,7 @@ public:
     void pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap);
 
     // group values and objects ids by table names, also convert DataValue to float to match SQL datatype
+    // <object_node_id, <object_id, table_name, value>>
     void groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes);
 
     // instance UA_Client to create client
@@ -105,6 +106,8 @@ private:
 
     // Mutex for thread safety when accessing the database
     std::mutex sqlMutex;
+
+
 
 };
 

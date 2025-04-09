@@ -201,6 +201,8 @@ void initialize() {
         const std::string sql_string = helper.setSQLString(sql_credentials);
         SQLClientManager sql_client_manager(sql_string);
 
+        cout << sql_string << endl;
+
         if (!connectToSQL(sql_client_manager)) return;
 
         std::cout << "Endpoint URL: " << opcua_credentials.at(0) << std::endl;

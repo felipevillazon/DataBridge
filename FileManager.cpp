@@ -155,15 +155,18 @@ vector<string> FileManager::getSQLConnectionDetails() {
     return credentialsSQL; // return vector
 }
 
-// map node_id to object_id and table_name
+// map object_node_id to object_id and table_name
 std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNodeIdToObjectId() {
 
   LOG_INFO("FileManager::mapNodeIdToObjectId(): Starting mapping between nodeId, objectId, and tableName...");  // log info
 
+  // <object_node_id , object_id, table_name>
   std::unordered_map<std::string, std::tuple<int, std::string>> nodeIdMap;  // Map to store results
+
+  // <object_node_id , object_id, table_name>
   std::vector<std::pair<std::string, std::tuple<int, std::string>>> batchData;  // Temporary batch container
 
-  // Iterate dynamically through the JSON structure
+  // iterate dynamically through the JSON structure
   for (const auto& [_, category] : configData.items()) {
     if (!category.is_object()) continue;
 
@@ -171,31 +174,31 @@ std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNo
       if (!entry.is_object() || !entry.contains("columns") || !entry["columns"].is_object()) continue;
 
       const auto& columns = entry["columns"];
-      int primaryId = -1;
+      int objectId;
       std::string nodeId;
       std::string tableName;
 
       // Extract primaryId (first integer found), nodeId, and tableName
       for (auto it = columns.begin(); it != columns.end(); ++it) {
-        if (it.value().is_number_integer() && primaryId == -1) {
-          primaryId = it.value().get<int>();  // First integer field is used as primaryId
+        if (it.key() == "object_id" && it.value().is_string()) {    // getting object_id to identify object-nodeid relation
+          objectId = it.value().get<int>();               // getting integer
         }
-        if (it.key() == "node_id" && it.value().is_string()) {
-          nodeId = it.value().get<std::string>();
+        if (it.key() == "object_node_id" && it.value().is_string()) {   // getting object_node_id to get object value from opcua server
+          nodeId = it.value().get<std::string>();   // node id string
         }
-        if (it.key() == "table_name" && it.value().is_string()) {
-          tableName = it.value().get<std::string>();
+        if (it.key() == "table_name" && it.value().is_string()) {      // getting table_name to realize reading table to later insert
+          tableName = it.value().get<std::string>();    // table name string
         }
       }
 
-      // Only store valid entries
-      if (!nodeId.empty() && primaryId != -1 && !tableName.empty()) {
-        batchData.emplace_back(nodeId, std::make_tuple(primaryId, tableName));
+      // only store valid entries
+      if (!nodeId.empty() && !std::to_string(objectId).empty() && !tableName.empty()) {     // check if entries are not empty
+        batchData.emplace_back(nodeId, std::make_tuple(objectId, tableName));  // place into batchData
       }
     }
   }
 
-  // Bulk insert into unordered_map
+  // bulk insert into unordered_map
   nodeIdMap.insert(batchData.begin(), batchData.end());
 
   return nodeIdMap;

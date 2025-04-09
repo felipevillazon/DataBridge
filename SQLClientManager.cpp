@@ -160,28 +160,27 @@ bool SQLClientManager::executeQuery(const string& query) {
 
 // create SQL database tables from external file
 void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting to build SQL database schema...");
 
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting to build SQL database schema...");  // log info
     FileManager fileManager;
     fileManager.loadFile(schemaFile);  // assume loadFile() is implemented
 
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file...");  // log info
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file...");
     if (fileManager.configData.empty()) {
-
-        LOG_ERROR("SQLClientManager::createDatabaseSchema(): Loading JSON file failed.");  // log error
+        LOG_ERROR("SQLClientManager::createDatabaseSchema(): Loading JSON file failed.");
         return;
     }
 
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file successfully.");  // log info
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting database schema creation...");  // log info
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file successfully.");
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting database schema creation...");
 
-    // Start a transaction (MySQL syntax)
-    executeQuery("START TRANSACTION;");  // start SQL transaction
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting SQL transaction...");  // log info
+    // Start a transaction (MariaDB syntax, same as MySQL)
+    executeQuery("START TRANSACTION;");
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting SQL transaction...");
 
     bool success = true;  // flag to track execution success
 
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Start iteration over tables, checking if tables already exist, if not, creating it..."); // log info
+    LOG_INFO("SQLClientManager::createDatabaseSchema(): Start iteration over tables, checking if tables already exist, if not, creating it...");
     for (const auto& table : fileManager.configData["tables"].items()) {
         const string& tableName = table.key();
         string createTableSQL = "CREATE TABLE IF NOT EXISTS " + tableName + " (\n";
@@ -196,9 +195,9 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
             const string& columnName = column.key();
             string columnType = column.value()["type"];
 
-            // fix invalid types for MySQL
-            if (columnType == "TEXT") columnType = "VARCHAR(255)";  // use VARCHAR(255) for MySQL
-            if (columnType == "DOUBLE") columnType = "FLOAT";      // use FLOAT for MySQL
+            // Fix invalid types for MariaDB (same as MySQL, but ensure compatibility)
+            if (columnType == "TEXT") columnType = "VARCHAR(255)";  // use VARCHAR(255) for MariaDB
+            if (columnType == "DOUBLE") columnType = "FLOAT";      // use FLOAT for MariaDB
 
             const bool isPrimaryKey = column.value().contains("primary_key") && column.value()["primary_key"];
             const bool isAutoIncrement = column.value().contains("auto_increment") && column.value()["auto_increment"];
@@ -211,17 +210,17 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
                 createTableSQL += " PRIMARY KEY";
             }
             if (isAutoIncrement) {
-                createTableSQL += " AUTO_INCREMENT";  // use AUTO_INCREMENT for MySQL
+                createTableSQL += " AUTO_INCREMENT";  // use AUTO_INCREMENT for MariaDB
             }
             if (!isNullable) {
                 createTableSQL += " NOT NULL";
             }
             if (!defaultValue.empty()) {
-                createTableSQL += " DEFAULT " + defaultValue;
+                createTableSQL += " DEFAULT '" + defaultValue + "'";
             }
         }
 
-        // Handle foreign keys
+        // Handle foreign keys, ensuring MariaDB's InnoDB engine is used for foreign key support
         if (table.value().contains("foreign_keys")) {
             for (const auto& fk : table.value()["foreign_keys"]) {
                 createTableSQL += ",\n    FOREIGN KEY (" + fk["column"].get<string>() + ") REFERENCES " +
@@ -230,12 +229,12 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
             }
         }
 
-        createTableSQL += "\n);";
+        createTableSQL += "\n) ENGINE=InnoDB;";  // Ensure InnoDB engine is used for foreign key support in MariaDB
 
         // Execute SQL to create table
         if (!executeQuery(createTableSQL)) {
-            LOG_ERROR("SQLClientManager::createDatabaseSchema(): Failed to create table.");  // log error
-            LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");  // log info
+            LOG_ERROR("SQLClientManager::createDatabaseSchema(): Failed to create table.");
+            LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");
             success = false;
             break;  // Stop execution if one query fails
         }
@@ -243,16 +242,15 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
 
     // Commit or rollback based on success status
     if (success) {
-        LOG_INFO("SQLClientManager::createDatabaseSchema(): Commit transaction.");  // log info
+        LOG_INFO("SQLClientManager::createDatabaseSchema(): Commit transaction.");
         executeQuery("COMMIT;");
-        LOG_INFO("SQLClientManager::createDatabaseSchema(): Database schema created successfully.");  // log info
+        LOG_INFO("SQLClientManager::createDatabaseSchema(): Database schema created successfully.");
     } else {
         executeQuery("ROLLBACK;");
-        LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");  // log info
-        LOG_ERROR("SQLClientManager::createDatabaseSchema(): Transaction rolled back due to errors.");  // log error
+        LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");
+        LOG_ERROR("SQLClientManager::createDatabaseSchema(): Transaction rolled back due to errors.");
     }
 }
-
 
 
 // prepare insert statements for SQL query
@@ -373,12 +371,11 @@ bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std
     }
 }
 
-
-// insert alarm data into Alarm table
+// insert alarm data into database
 void SQLClientManager::insertAlarm(
-    const string &table,
-    const unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values,
-    const string &type)
+    const std::string &table,
+    const std::unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values,
+    const std::string &type)
 {
     std::ostringstream queryStream;
 
@@ -404,20 +401,70 @@ void SQLClientManager::insertAlarm(
 
     queryStream << ")";
 
-    std::string query = queryStream.str();
+    const std::string query = queryStream.str();
+
+    // Allocate statement handle
+    SQLHSTMT stmt;
+    SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt);
+
+    // Begin transaction (disable auto-commit)
+    if (SQLSetConnectAttr(sqlConnHandle, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0) != SQL_SUCCESS) {
+        LOG_ERROR("SQLClientManager::insertAlarm(): Failed to disable auto-commit.");
+        return;
+    }
+
+    // Prepare the SQL statement
+    if (SQLPrepare(stmt, (SQLCHAR*)query.c_str(), SQL_NTS) != SQL_SUCCESS) {
+        LOG_ERROR("SQLClientManager::insertAlarm(): Failed to prepare SQL statement.");
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        return;
+    }
 
     // Log the query for debugging
     std::cout << "Executing Query: " << query << std::endl;
 
-    // Assume you have a function executeQuery that takes the query and executes it with the given values
+    // Iterate through the provided values
     for (const auto& [nodeId, data] : values) {
         int severity, event_id, state_id, subsystem_id, object_id, error_code;
         float object_value;
 
         std::tie(severity, event_id, state_id, subsystem_id, object_id, object_value, error_code) = data;
 
-        // Execute the query with these values
-        executeQuery(query, severity, event_id, state_id, subsystem_id, object_id, object_value, error_code);
+        // Bind parameters
+        SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &severity, 0, NULL);
+        SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &event_id, 0, NULL);
+        SQLBindParameter(stmt, 3, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &state_id, 0, NULL);
+        SQLBindParameter(stmt, 4, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &subsystem_id, 0, NULL);
+        SQLBindParameter(stmt, 5, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &object_id, 0, NULL);
+        SQLBindParameter(stmt, 6, SQL_PARAM_INPUT, SQL_C_FLOAT, SQL_REAL, 0, 0, &object_value, 0, NULL);
+        SQLBindParameter(stmt, 7, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &error_code, 0, NULL);
+
+        // Execute the statement
+        SQLRETURN ret = SQLExecute(stmt);
+        if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+            LOG_ERROR("SQLClientManager::insertAlarm(): Failed to execute statement. Rolling back transaction.");
+
+            // Rollback transaction on failure
+            SQLEndTran(SQL_HANDLE_DBC, sqlConnHandle, SQL_ROLLBACK);
+            SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+            // Re-enable auto-commit
+            SQLSetConnectAttr(sqlConnHandle, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+            return;
+        }
     }
+
+    // Commit transaction if all inserts succeed
+    if (SQLEndTran(SQL_HANDLE_DBC, sqlConnHandle, SQL_COMMIT) != SQL_SUCCESS) {
+        LOG_ERROR("SQLClientManager::insertAlarm(): Failed to commit transaction.");
+        SQLEndTran(SQL_HANDLE_DBC, sqlConnHandle, SQL_ROLLBACK);
+    }
+
+    // Cleanup
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    // Re-enable auto-commit
+    SQLSetConnectAttr(sqlConnHandle, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
 }
+
 

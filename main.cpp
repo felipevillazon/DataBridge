@@ -9,30 +9,34 @@
 #include "OPCUAClientManager.h"
 #include "Helper.h"
 
-// Atomic flag for graceful shutdown
+// atomic flag for graceful shutdown
 std::atomic<bool> keepRunning(true);
 
-// Signal handler for clean shutdown
+// signal handler for clean shutdown
 void signalHandler(const int signum) {
     std::cout << "\nReceived signal " << signum << ". Shutting down gracefully...\n";
     keepRunning = false;
 }
 
-// Function to initialize logger
+// function to initialize logger
 void setupLogger() {
     const std::string logFile = "/home/felipevillazon/Xelips/application.log";
     ::Logger &logger = ::Logger::getInstance(logFile);
 }
 
-// Function to load credentials
-void loadCredentials(FileManager& fileManager, std::vector<std::string>& sql_credentials, std::vector<std::string>& opcua_credentials) {
+// function to load credentials
+void loadCredentials(FileManager& fileManager, std::vector<std::string>& sql_credentials, std::vector<std::string>& opcua_credentials_plc_1, std::vector<std::string>& opcua_credentials_plc_2) {
     const std::string credentialFile = "/home/felipevillazon/Xelips/credentials.JSON";
     fileManager.loadFile(credentialFile);
     sql_credentials = fileManager.getSQLConnectionDetails();
-    opcua_credentials = fileManager.getOPCUAServerDetails();
+    opcua_credentials_plc_1 = fileManager.getOPCUAServerDetails("PLC_1");
+    opcua_credentials_plc_2 = fileManager.getOPCUAServerDetails("PLC_2");
 
-    if (opcua_credentials.size() < 3) {
-        throw std::runtime_error("Insufficient OPC UA credentials.");
+
+    if (opcua_credentials_plc_1.size() < 3) {
+        throw std::runtime_error("Insufficient OPC UA credentials for PLC_1");
+    } else if (opcua_credentials_plc_2.size() < 3) {
+        throw std::runtime_error("Insufficient OPC UA credentials for PLC_2");
     }
 }
 
@@ -191,30 +195,53 @@ void initialize() {
         unsigned int n_threads = std::thread::hardware_concurrency();
         std::cout << "Recommended threads: " << n_threads << std::endl;
 
+        // initializing logger
         setupLogger();
 
+        // initialize FileManager
         FileManager file_manager;
-        std::vector<std::string> sql_credentials, opcua_credentials;
-        loadCredentials(file_manager, sql_credentials, opcua_credentials);
+        std::vector<std::string> sql_credentials, opcua_credentials_plc_1, opcua_credentials_plc_2;
 
+        // initialize OPCUA and SQL credentials
+        loadCredentials(file_manager, sql_credentials, opcua_credentials_plc_1, opcua_credentials_plc_2);
+
+        // initialize Helper
         Helper helper;
         const std::string sql_string = helper.setSQLString(sql_credentials);
-        SQLClientManager sql_client_manager(sql_string);
 
-        cout << sql_string << endl;
+        // initialize SQLClientManager
+        SQLClientManager sql_client_manager_1(sql_string);  // SQLClientManager instance for Thread 1 (sql client 1)
+        SQLClientManager sql_client_manager_2(sql_string);  // SQLCLientManager instance for Thread 2 (sql client 2)
 
-        if (!connectToSQL(sql_client_manager)) return;
+        cout << sql_string << endl; // SQL connection string (same for both SQLCLientManager instances, but it should use different TCP ports)
 
-        std::cout << "Endpoint URL: " << opcua_credentials.at(0) << std::endl;
+        // trying to connect to SQL server with sql client 1
+        if (!connectToSQL(sql_client_manager_1)) return;
+
+        // trying to connect to SQL server with sql client 2
+        if (!connectToSQL(sql_client_manager_2)) return;
+
+
+        std::cout << "Endpoint URL: " << opcua_credentials_plc_1.at(0) << std::endl;  // endpoint of OPCUA server
+        std::cout << "Endpoint URL: " << opcua_credentials_plc_2.at(0) << std::endl;  // endpoint of OPCUA server
 
         // Create OPC UA Clients for both servers
-        OPCUAClientManager opcua_client_manager(opcua_credentials.at(0), opcua_credentials.at(1), opcua_credentials.at(2));
-        OPCUAClientManager opcua_client_manager_2("opc.tcp://192.168.1.200:4840", opcua_credentials.at(1), opcua_credentials.at(2));
+        OPCUAClientManager opcua_client_manager_1(opcua_credentials_plc_1.at(0), opcua_credentials_plc_1.at(1), opcua_credentials_plc_1.at(2), sql_client_manager_1);
+        OPCUAClientManager opcua_client_manager_2(opcua_credentials_plc_2.at(0), opcua_credentials_plc_2.at(1), opcua_credentials_plc_2.at(2), sql_client_manager_2);
 
         std::atomic<bool> keepRunning(true);
 
+        const std::string staticInformationFile_PLC_1 = "/home/felipevillazon/PLC_1.JSON";
+        file_manager.loadFile(staticInformationFile_PLC_1);
+        auto mappedData_PLC_1 = file_manager.mapNodeIdToObjectId();
+
+        const std::string staticInformationFile_PLC_2 = "/home/felipevillazon/PLC_2.JSON";
+        file_manager.loadFile(staticInformationFile_PLC_2);
+        auto mappedData_PLC_2 = file_manager.mapNodeIdToObjectId();
+
+
         // Capture both clients for async processing
-        opcua_client_manager.client.onSessionActivated([&] {
+        opcua_client_manager_1.client.onSessionActivated([&] {
             std::cout << "[INFO] Session activated for PLC 1" << std::endl;
 
             std::thread([&] {
@@ -222,11 +249,31 @@ void initialize() {
                     auto startTime = std::chrono::high_resolution_clock::now();
 
                     // Processing logic here (polling, grouping, etc.)
+                    opcua_client_manager_1.pollNodeValues(mappedData_PLC_1);   // poll values from all mapped node ids
+                    opcua_client_manager_1.groupByTableName(opcua_client_manager_1.monitoredNodes);  // group data and prepared it for sql database
 
+                    // sql server-client interaction
+                    sql_client_manager_1.prepareInsertStatements(opcua_client_manager_1.tableObjects);   // prepare insert statements for sql database
+                    sql_client_manager_1.insertBatchData(opcua_client_manager_1.tableObjects);    // insert batch data into tables, all at once
+
+                    // End measuring time
                     auto endTime = std::chrono::high_resolution_clock::now();
-                    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
-                    //int sleepTime = std::max(0, 1000000 - duration.count());
-                   // std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
+                    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);  // Use microseconds for higher precision
+
+                    //std::cout << "Execution time for pollNodeValues: " << duration.count() << " µs\n";  // µs for microseconds
+
+                    // Calculate remaining time to sleep to maintain 1 second frequency
+                    const int executionTime = duration.count();  // Time taken by pollNodeValues in microseconds
+                    int sleepTime = std::max(0, 1000000 - executionTime);  // 1000000 µs = 1 second
+
+
+                    // Print how much time we sleep
+                    //std::cout << "Sleeping for: " << sleepTime / 1000 << " ms\n";  // Convert sleep time to milliseconds for clarity
+
+                    // Sleep for the remaining time to complete 1-second cycle
+                    std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
+
+
                 }
             }).detach();
 
@@ -234,11 +281,44 @@ void initialize() {
             std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarm = {
                 std::make_tuple(opcua::NodeId(4,5), opcua::NodeId(4,6), opcua::NodeId(4,7))
             };
-            opcua_client_manager.setSubscription(100, 100, alarm);
+            opcua_client_manager_1.setSubscription(100, 100, alarm);
         });
 
         opcua_client_manager_2.client.onSessionActivated([&] {
-            std::cout << "[INFO] Session activated for PLC 2" << std::endl;
+            std::cout << "[INFO] Session activated for PLC 1" << std::endl;
+
+            std::thread([&] {
+                while (keepRunning) {
+                    auto startTime = std::chrono::high_resolution_clock::now();
+
+                    // Processing logic here (polling, grouping, etc.)
+                    opcua_client_manager_2.pollNodeValues(mappedData_PLC_2);   // poll values from all mapped node ids
+                    opcua_client_manager_2.groupByTableName(opcua_client_manager_2.monitoredNodes);  // group data and prepared it for sql database
+
+                    // sql server-client interaction
+                    sql_client_manager_2.prepareInsertStatements(opcua_client_manager_2.tableObjects);   // prepare insert statements for sql database
+                    sql_client_manager_2.insertBatchData(opcua_client_manager_2.tableObjects);    // insert batch data into tables, all at once
+
+                    // End measuring time
+                    auto endTime = std::chrono::high_resolution_clock::now();
+                    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);  // Use microseconds for higher precision
+
+                    //std::cout << "Execution time for pollNodeValues: " << duration.count() << " µs\n";  // µs for microseconds
+
+                    // Calculate remaining time to sleep to maintain 1 second frequency
+                    const int executionTime = duration.count();  // Time taken by pollNodeValues in microseconds
+                    int sleepTime = std::max(0, 1000000 - executionTime);  // 1000000 µs = 1 second
+
+
+                    // Print how much time we sleep
+                    //std::cout << "Sleeping for: " << sleepTime / 1000 << " ms\n";  // Convert sleep time to milliseconds for clarity
+
+                    // Sleep for the remaining time to complete 1-second cycle
+                    std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
+
+
+                }
+            }).detach();
 
             std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarm = {
                 std::make_tuple(opcua::NodeId(4,5), opcua::NodeId(4,6), opcua::NodeId(4,7))
@@ -247,8 +327,8 @@ void initialize() {
         });
 
         // Set up disconnect handlers
-        opcua_client_manager.client.onSessionClosed([] { std::cout << "[INFO] Session PLC 1 closed" << std::endl; });
-        opcua_client_manager.client.onDisconnected([] { std::cout << "[INFO] Client PLC 1 disconnected" << std::endl; });
+        opcua_client_manager_1.client.onSessionClosed([] { std::cout << "[INFO] Session PLC 1 closed" << std::endl; });
+        opcua_client_manager_1.client.onDisconnected([] { std::cout << "[INFO] Client PLC 1 disconnected" << std::endl; });
 
         opcua_client_manager_2.client.onSessionClosed([] { std::cout << "[INFO] Session PLC 2 closed" << std::endl; });
         opcua_client_manager_2.client.onDisconnected([] { std::cout << "[INFO] Client PLC 2 disconnected" << std::endl; });
@@ -257,10 +337,10 @@ void initialize() {
         std::thread opcuaThread1([&] {
             while (keepRunning) {
                 try {
-                    opcua_client_manager.client.connect(opcua_credentials.at(0));
-                    opcua_client_manager.client.run();
+                    opcua_client_manager_1.client.connect(opcua_credentials_plc_1.at(0));
+                    opcua_client_manager_1.client.run();
                 } catch (const opcua::BadStatus& e) {
-                    opcua_client_manager.client.disconnect();
+                    opcua_client_manager_1.client.disconnect();
                     std::cerr << "[ERROR] PLC 1: " << e.what() << "\nRetrying in 3 seconds..." << std::endl;
                     std::this_thread::sleep_for(std::chrono::seconds(3));
                 }
@@ -270,7 +350,7 @@ void initialize() {
         std::thread opcuaThread2([&] {
             while (keepRunning) {
                 try {
-                    opcua_client_manager_2.client.connect("opc.tcp://192.168.1.200:4840");
+                    opcua_client_manager_2.client.connect(opcua_credentials_plc_2.at(0));
                     opcua_client_manager_2.client.run();
                 } catch (const opcua::BadStatus& e) {
                     opcua_client_manager_2.client.disconnect();

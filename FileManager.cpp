@@ -38,53 +38,64 @@ void FileManager::loadFile(const string& filename) {
   }
 
 // retrieve OPC Server login data
-vector<string> FileManager::getOPCUAServerDetails() {
+vector<string> FileManager::getOPCUAServerDetails(const std::string& plc) {
 
-  /* This method retrieve the OPC UA server credentials from the configuration server and return a vector with the information */
+    /* This method retrieves the OPC UA server credentials for the specified PLC from the configuration file
+       and returns a vector with the information for the associated PLC (either PLC_1 or PLC_2). */
 
-  LOG_INFO("ConfigManager::getOPCUAServerDetails(): Start retrieving OPC UA connection credentials...");  // log info
+    LOG_INFO("ConfigManager::getOPCUAServerDetails(): Start retrieving OPC UA connection credentials for " + plc);  // log info
 
-      if (configData.contains("opcua")) {  // check if file contains pcua details
+    if (configData.contains("opcua")) {  // Check if file contains OPC UA details
+        auto opcuaData = configData["opcua"];   // OPC UA data holder
+        bool hasError = false;     // Error flag
+        string errorMsg;          // Error message
 
-        auto opcuaData = configData["opcua"];   // opcua data holder
-        bool hasError = false;     // error flag
-        string errorMsg;     // error message
+        if (opcuaData.contains(plc)) {  // Check if PLC (PLC_1 or PLC_2) exists in the config
+            auto plcData = opcuaData[plc];  // Get data for the specific PLC
 
-        if (!opcuaData["endpoint"].empty()) {    // check if endpoint information exists
-          credentialsOPCUA.push_back(opcuaData["endpoint"]);   // if inside file, put it in vector
-        } else {    // if not found
-          hasError = true;   // set error flag to true
-          errorMsg += "[missing: endpoint] ";    // add message to error message
+            // Check and add the endpoint
+            if (!plcData["endpoint"].empty()) {
+                credentialsOPCUA.push_back(plcData["endpoint"]);
+            } else {
+                hasError = true;
+                errorMsg += "[missing: endpoint] ";
+            }
+
+            // Check and add the username
+            if (!plcData["username"].empty()) {
+                credentialsOPCUA.push_back(plcData["username"]);
+            } else {
+                hasError = true;
+                errorMsg += "[missing: username] ";
+            }
+
+            // Check and add the password
+            if (!plcData["password"].empty()) {
+                credentialsOPCUA.push_back(plcData["password"]);
+            } else {
+                hasError = true;
+                errorMsg += "[missing: password] ";
+            }
+
+            if (hasError) {  // If any of the credentials are missing, throw an error
+                LOG_ERROR(errorMsg);  // Log error
+                throw std::runtime_error("OPC UA server details not found for " + plc + " " + errorMsg);
+            }
+
+        } else {  // If the specified PLC is not found
+            LOG_ERROR("[missing: " + plc + " configuration]");
+            throw std::runtime_error("OPC UA server details for " + plc + " not found in configuration.");
         }
 
-        if (!opcuaData["username"].empty()) {   // check if usernname inside file
-          credentialsOPCUA.push_back(opcuaData["username"]);   // if inside, push back to vector
-        } else {    // if not found username
-          hasError = true;   // set error flag to true
-          errorMsg += "[missing: username] ";   // add information about missing username to error message
-        }
-
-        if (!opcuaData["password"].empty()) {    // check if pasword inside file
-          credentialsOPCUA.push_back(opcuaData["password"]);   // if password inside file, push back to vector
-        } else {    // if password not found
-          hasError = true;   // set error flag to true
-          errorMsg += "[missing: password] ";   // add information about missing password to error message
-        }
-
-        if (hasError) {  // ff any of the credentials are missing, throw an error with a detailed message
-          LOG_ERROR(errorMsg); // log error
-          throw std::runtime_error("OPC UA server details not found in configuration " + errorMsg);
-        }
-
-      } else {    // if opcua credential are not inside file
-        LOG_ERROR(string("ConfigManager::getOPCUAServerDetails(): OPC UA server details not found in configuration file " + filename));
+    } else {  // If OPC UA credentials are not found in the config file
+        LOG_ERROR("ConfigManager::getOPCUAServerDetails(): OPC UA server details not found in configuration file.");
         throw std::runtime_error("OPC UA server details not found in configuration.");
-      }
+    }
 
-  LOG_INFO("ConfigManager::getOPCUAServerDetails(): OPC UA connection credentials retrieved successfully."); // log info
-  return credentialsOPCUA;  // return vector
-
+    LOG_INFO("ConfigManager::getOPCUAServerDetails(): OPC UA connection credentials for " + plc + " retrieved successfully.");  // Log info
+    return credentialsOPCUA;  // Return vector with credentials for the specified PLC
 }
+
 
 // retrieve SQL database login data
 vector<string> FileManager::getSQLConnectionDetails() {

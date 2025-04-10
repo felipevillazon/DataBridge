@@ -9,8 +9,9 @@
 #include <mutex>
 
 // constructor
-OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& username, const string& password)
-    : endpointUrl(endpointUrl), username(username), password(password) {}
+OPCUAClientManager::OPCUAClientManager(const string& endpointUrl, const string& username, const string& password, SQLClientManager& dbManager)
+    : endpointUrl(endpointUrl), username(username), password(password), sqlClientManager(dbManager) {
+}
 
 
 // destructor
@@ -298,6 +299,7 @@ void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const i
 
         // Insert new alarm record in the database
         //insertIntoDatabase(eventId, "New Alarm", newSeverity, additionalData);   // insert into database in its corresponding table
+        sqlClientManager.insertAlarm("alarms", alarmDataBaseValues, "SEVERITY");
 
         // store alarm details
         activeAlarms[node] = {eventId, newSeverity, false, false};  // record new alarm into activeAlarms
@@ -306,7 +308,8 @@ void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const i
         //std::cout << "[INFO] Updating alarm severity for event ID: " << it->second.eventId << std::endl;
         pollAlarmNodes(node);
         prepareAlarmDataBaseData(node);
-        //insertIntoDatabase(it->second.eventId, "Updated Severity", newSeverity);  // insert new column into database
+        sqlClientManager.insertAlarm("alarms", alarmDataBaseValues, "SEVERITY");
+
         it->second.severity = newSeverity; // update severity from activeAlarm
     }
 }
@@ -328,6 +331,7 @@ void OPCUAClientManager::handleAckChange(const opcua::NodeId& node, const bool i
         std::cout << "[INFO] Alarm acknowledged for event ID: " << it->second.eventId << std::endl;
         pollAlarmNodes(relatedSeverityNode);
         prepareAlarmDataBaseData(relatedSeverityNode);
+        sqlClientManager.insertAlarm("alarms", alarmDataBaseValues, "ACKNOWLEDGED");
         //insertIntoDatabase(it->second.eventId, "Acknowledged", it->second.severity);  // set acknowledged timestamp
         it->second.acknowledged = true;   // turn to true flag from activeAlarm struct
     }
@@ -350,6 +354,7 @@ void OPCUAClientManager::handleFixedChange(const opcua::NodeId& node, const bool
         pollAlarmNodes(relatedSeverityNode);
         prepareAlarmDataBaseData(relatedSeverityNode);
         //insertIntoDatabase(it->second.eventId, "Fixed", it->second.severity);  // set fixed timestamp
+        sqlClientManager.insertAlarm("alarms", alarmDataBaseValues, "FIXED");
         it->second.fixed = true;  // turn to true flag from activeAlarm struct
 
         activeAlarms.erase(relatedSeverityNode);  // delete current alarm event from activeAlarms

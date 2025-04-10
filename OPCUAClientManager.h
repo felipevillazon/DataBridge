@@ -18,12 +18,14 @@ using namespace std;
 using namespace opcua;
 
 
+class SQLClientManager;  // forward declaration
+
 class OPCUAClientManager {
 
 public:
 
     // constructor
-    explicit OPCUAClientManager(const string& endpointUrl, const string& username = "", const string& password = "");
+    explicit OPCUAClientManager(const string& endpointUrl, const string& username, const string& password, SQLClientManager& dbManager);
 
     // destructor
     ~OPCUAClientManager();
@@ -78,6 +80,8 @@ public:
     void prepareAlarmDataBaseData(const opcua::NodeId& node);
 
 private:
+
+    SQLClientManager& sqlClientManager;  // reference to external SQL manager
 
     // the endpoint for the client to connect to. Such as "opc.tcp://host:port".
     string endpointUrl;

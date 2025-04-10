@@ -256,12 +256,16 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
 // prepare insert statements for SQL query
 void SQLClientManager::prepareInsertStatements(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects) {
 
+    // data is inserted with a given frequency n where n is the order of seconds. Therefore, same SQL queries will be executed at this
+    // peace. In order to make the code faster we avoid to create the SQL statement everytime but just create it just once
+    // per each table and later just execute when needed.
+
     LOG_INFO("SQLClientManager::prepareInsertStatements(): Preparing insert statements...");  // log info
 
     for (const auto& [tableName, records] : tableObjects) {
         // Generate the INSERT INTO query for each table
         std::ostringstream queryStream;
-        queryStream << "INSERT INTO " << tableName << " (object_id, object_value) VALUES (?, ?)";
+        queryStream << "INSERT INTO " << tableName << " (object_id, object_value) VALUES (?, ?)";  // only two values needed
         std::string query = queryStream.str();
 
         // std::cout << "Prepared query for table '" << tableName << "': " << query << std::endl; // (avoid printing and use logger)

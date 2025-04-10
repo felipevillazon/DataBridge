@@ -24,7 +24,7 @@ public:
     ~FileManager(); // destructor
 
     void loadFile(const string& filename); //  load JSON file
-    vector<string> getOPCUAServerDetails(); // retrieve OPC Server login data
+    vector<string> getOPCUAServerDetails(const std::string& plc); // retrieve OPC Server login data
     vector<string> getSQLConnectionDetails(); // retrieve SQL database login data
 
     // <NODE_ID, OBJECT_ID, TABLE_NAME>

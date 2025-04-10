@@ -6,7 +6,8 @@
 
 #include <array>
 #include <open62541/plugin/log.h>
-
+#include <string>
+#include <regex>
 #include "Logger.h"
 
 // constructor
@@ -44,22 +45,22 @@ string Helper::setSQLString(const vector<string>& credentialsSQL) {
 }
 
 // from nodeId string get nameSpaceIndex and identifier
-std::array<int, 2> Helper::getNodeIdInfo(const string& nodeId) {
+std::array<int, 2> Helper::getNodeIdInfo(const std::string& nodeId) {
 
-    LOG_INFO("DataProcessor::getNodeIdInfo(): Starting getting node id information: (nameSpaceIndex, identifier)...");
+
     int ns = 0, id = 0;
-    char prefix1, prefix2, eq1, sep, prefix3, eq2;
 
-    std::istringstream ss(nodeId);
+    // Regex to match the "ns=x;i=y" format where x and y are integers
+    std::regex pattern(R"(^ns=(\d+);i=(\d+))");
+    std::smatch matches;
 
-    // Ensure format: "ns=x;i=y"
-    if (!(ss >> prefix1 >> prefix2 >> eq1 >> ns >> sep >> prefix3 >> eq2 >> id) ||
-        prefix1 != 'n' || prefix2 != 's' || eq1 != '=' || sep != ';' ||
-        prefix3 != 'i' || eq2 != '=') {
+    if (std::regex_match(nodeId, matches, pattern)) {
+        ns = std::stoi(matches[1].str());  // Convert matched string to int (namespace)
+        id = std::stoi(matches[2].str());  // Convert matched string to int (identifier)
+    } else {
 
-        LOG_ERROR("Helper::getNodeIdInfo: Invalid node ID. Wrong format or not existing in OPC UA server: " + nodeId);   // log error
         throw std::invalid_argument("Invalid node ID. Wrong format or not existing in OPC UA server: " + nodeId);
-        }
+    }
 
     return {ns, id};
 }

@@ -5,6 +5,7 @@
 #include "FileManager.h"
 
 #include "Logger.h"
+#include "Helper.h"
 
 
 // constructor
@@ -213,5 +214,46 @@ std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNo
   nodeIdMap.insert(batchData.begin(), batchData.end());
 
   return nodeIdMap;
+}
+
+
+// map severity node_id, acknowledged_node_id and fixed_node_id from file
+// Implementation of getNodeIdListAlarm
+std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> FileManager::getNodeIdListAlarm() {
+  std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarmRelatedNodeId;
+
+  // Check if the "sensors" key exists in the configData
+  if (configData.contains("objects")) {
+    // Iterate through all sensors
+    for (const auto& objectItem : configData["objects"].items()) {
+      const auto& object = objectItem.value();  // Get the sensor data
+
+      // Check if "alarm" exists and has the required columns
+      if (object.contains("alarm") && object["alarm"].contains("columns")) {
+        const auto& alarmColumns = object["alarm"]["columns"];
+
+        // Ensure all three required node_ids are available
+        if (alarmColumns.contains("severity_node_id") &&
+            alarmColumns.contains("acknowledged_node_id") &&
+            alarmColumns.contains("fixed_node_id")) {
+
+          // Create NodeId instances and store them in the tuple
+          std::array<int, 2> severityInfo = Helper::getNodeIdInfo(alarmColumns["severity_node_id"].get<std::string>());
+          std::array<int, 2> acknowledgedInfo = Helper::getNodeIdInfo(alarmColumns["acknowledged_node_id"].get<std::string>());
+          std::array<int, 2> fixedInfo = Helper::getNodeIdInfo(alarmColumns["fixed_node_id"].get<std::string>());
+
+          // Now, create the NodeId instances using the extracted namespace and identifier
+          opcua::NodeId severityNodeId(severityInfo[0], severityInfo[1]);  // severityInfo[0] is namespaceIndex, severityInfo[1] is identifier
+          opcua::NodeId acknowledgedNodeId(acknowledgedInfo[0], acknowledgedInfo[1]); // Same for acknowledged node
+          opcua::NodeId fixedNodeId(fixedInfo[0], fixedInfo[1]); // Same for fixed node
+
+          // Add the tuple to the result vector
+          alarmRelatedNodeId.emplace_back(severityNodeId, acknowledgedNodeId, fixedNodeId);
+            }
+      }
+    }
+  }
+
+  return alarmRelatedNodeId;
 }
 

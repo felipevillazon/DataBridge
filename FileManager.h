@@ -12,6 +12,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <open62541pp/node.hpp>
 
 using namespace std;
 using ordered_json = nlohmann::ordered_json;
@@ -32,6 +33,10 @@ public:
 
     string filename;  // path to the location of the credential file
     ordered_json configData;  // store json file content
+
+
+    std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> getNodeIdListAlarm();
+
 
 private:
 

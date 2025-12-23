@@ -143,8 +143,10 @@ void runDataProcessingLoop(OPCUAClientManager& opcua_client_manager,
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
+            constexpr long long POLL_PERIOD_US = 5'000'000; // 5 seconds
+
             // 1s loop target
-            long long sleepUs = std::max<long long>(0, 1000000LL - duration.count());
+            long long sleepUs = std::max<long long>(0, POLL_PERIOD_US - duration.count());
             std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         }
         catch (const std::exception& e) {

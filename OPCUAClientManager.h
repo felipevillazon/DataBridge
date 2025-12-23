@@ -14,6 +14,8 @@
 #include <queue>
 #include "SQLClientManager.h"
 
+#include "atomic"
+
 using namespace std;
 using namespace opcua;
 
@@ -78,6 +80,8 @@ public:
 
     // prepare alarm data to insert into database
     void prepareAlarmDataBaseData(const opcua::NodeId& node);
+
+    std::atomic<bool> sessionAlive{false};
 
 private:
 

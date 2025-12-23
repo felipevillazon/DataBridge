@@ -50,6 +50,7 @@ bool OPCUAClientManager::connect() {
     try {  // try to connect to OPC UA server
 
         client.connect(endpointUrl);  // connect to OPC UA server
+        sessionAlive = true;
 
         std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl; // (avoid printing and use logger)
         //client.run();  // run server-client connection
@@ -67,6 +68,7 @@ bool OPCUAClientManager::connect() {
      // std::cout << "Connected to OPC UA server at " << endpointUrl << std::endl; // (avoid printing and use logger)
     ::LOG_INFO("OPCUAClientManager::connect(): Successfully connected to OPC UA server."); // log info
 
+
     return true;
 }
 
@@ -78,6 +80,7 @@ void OPCUAClientManager::disconnect() {
 
     ::LOG_INFO("OPCUAClientManager::disconnect(): Disconnecting from OPC UA server..."); // log info
 
+    sessionAlive = false;
     client.disconnect();  // disconnect from opc ua server
 
     // check if client is disconnected

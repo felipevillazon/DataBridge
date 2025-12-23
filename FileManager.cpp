@@ -6,7 +6,8 @@
 
 #include "Logger.h"
 #include "Helper.h"
-
+#include <filesystem>
+#include <system_error>
 
 // constructor
 FileManager::FileManager()  {;}
@@ -43,6 +44,8 @@ vector<string> FileManager::getOPCUAServerDetails(const std::string& plc) {
 
     /* This method retrieves the OPC UA server credentials for the specified PLC from the configuration file
        and returns a vector with the information for the associated PLC (either PLC_1 or PLC_2). */
+  credentialsOPCUA.clear();
+
 
     LOG_INFO("ConfigManager::getOPCUAServerDetails(): Start retrieving OPC UA connection credentials for " + plc);  // log info
 
@@ -103,6 +106,8 @@ vector<string> FileManager::getSQLConnectionDetails() {
 
   /* This method retrieve the SQL server credentials from the configuration server and return a vector with the information */
 
+  credentialsSQL.clear();
+
   LOG_INFO("ConfigManager::getSQLConnectionDetails(): Start retrieving SQL connection credentials...");  // log info
 
     if (configData.contains("sql")) {  // check if file contains SQL credentials
@@ -159,7 +164,7 @@ vector<string> FileManager::getSQLConnectionDetails() {
       }
 
     } else {   // if not credential for SQL connection found
-      LOG_ERROR(string("ConfigManager::getSQLConnectionDetails(): OPC UA server details not found in configuration file " + filename)); // log error
+      LOG_ERROR(string("ConfigManager::getSQLConnectionDetails(): SQL server details not found in configuration file.")); // log error
       throw std::runtime_error("SQL server details not found in configuration.");
     }
 
@@ -186,13 +191,13 @@ std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNo
       if (!entry.is_object() || !entry.contains("columns") || !entry["columns"].is_object()) continue;
 
       const auto& columns = entry["columns"];
-      int objectId;
+      int objectId = -1 ;
       std::string nodeId;
       std::string tableName;
 
       // Extract primaryId (first integer found), nodeId, and tableName
       for (auto it = columns.begin(); it != columns.end(); ++it) {
-        if (it.key() == "object_id" && it.value().is_string()) {    // getting object_id to identify object-nodeid relation
+        if (it.key() == "object_id" && it.value().is_number_integer()) {    // getting object_id to identify object-nodeid relation
           objectId = it.value().get<int>();               // getting integer
         }
         if (it.key() == "object_node_id" && it.value().is_string()) {   // getting object_node_id to get object value from opcua server
@@ -204,9 +209,10 @@ std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNo
       }
 
       // only store valid entries
-      if (!nodeId.empty() && !std::to_string(objectId).empty() && !tableName.empty()) {     // check if entries are not empty
-        batchData.emplace_back(nodeId, std::make_tuple(objectId, tableName));  // place into batchData
+      if (!nodeId.empty() && objectId >= 0 && !tableName.empty()) {
+        batchData.emplace_back(nodeId, std::make_tuple(objectId, tableName));
       }
+
     }
   }
 
@@ -256,4 +262,54 @@ std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> FileManager
 
   return alarmRelatedNodeId;
 }
+
+// check if file has been modified
+bool FileManager::hasFileBeenModified(const std::string& filename) {
+  std::lock_guard<std::mutex> lock(fileWatchMutex_);
+
+  std::error_code ec;
+  if (!std::filesystem::exists(filename, ec) || ec) {
+    LOG_ERROR("FileManager::hasFileBeenModified(): file does not exist or cannot be accessed: " + filename);
+    return false; // or throw, but for a watcher it's usually better to not crash
+  }
+
+  const auto currentWriteTime = std::filesystem::last_write_time(filename, ec);
+  if (ec) {
+    LOG_ERROR("FileManager::hasFileBeenModified(): could not read last_write_time for: " + filename);
+    return false;
+  }
+
+  const auto it = lastWriteTime_.find(filename);
+
+  // First time we see this file: store timestamp, do NOT treat as "modified"
+  if (it == lastWriteTime_.end()) {
+    lastWriteTime_[filename] = currentWriteTime;
+    return false;
+  }
+
+  // If timestamp differs, mark as modified and update stored value
+  if (currentWriteTime != it->second) {
+    it->second = currentWriteTime;
+    return true;
+  }
+
+  return false;
+}
+
+// Check if file has been modified and reload if necessary
+bool FileManager::reloadFileIfModified(const std::string& filename) {
+  if (!hasFileBeenModified(filename)) return false;
+
+  try {
+    LOG_INFO("... reloading ...");
+    loadFile(filename);
+    return true;
+  } catch (const std::exception& e) {
+    LOG_ERROR(std::string("reloadFileIfModified(): reload failed, keeping old config. Reason: ") + e.what());
+    return false;
+  }
+}
+
+
+
 

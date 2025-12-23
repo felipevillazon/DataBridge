@@ -32,6 +32,7 @@ SQLClientManager::~SQLClientManager() {
 // connect to SQL server
 bool SQLClientManager::connect() {
 
+    disconnect();  // disconnect from server if connected
     /* Connect method intend to achieve a communication and connection with the SQL server */
 
     LOG_INFO("SQLClientManager::connect(): Connecting to SQL server...");  // log info
@@ -41,6 +42,7 @@ bool SQLClientManager::connect() {
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
         LOG_ERROR("SQLClientManager::connect(): Failed to allocate memory for SQL connection.");  // log error
         // std::cerr << "Error allocating ODBC environment handle." << std::endl; // (avoid print and use logger)
+        disconnect();
         return false;
     }
 
@@ -49,6 +51,8 @@ bool SQLClientManager::connect() {
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
         LOG_ERROR("SQLClientManager::connect(): Failed to set ODBC environment attributes."); // log error
         // std::cerr << "Error setting ODBC version." << std::endl; // (avoid print and use logger)
+        disconnect();
+
         return false;
     }
 
@@ -57,6 +61,7 @@ bool SQLClientManager::connect() {
     if (sqlReturnCode != SQL_SUCCESS && sqlReturnCode != SQL_SUCCESS_WITH_INFO) {
         LOG_ERROR("SQLClientManager::connect(): Failed to allocate ODBC connection handle.");  // log error
         //std::cerr << "Error allocating ODBC connection handle." << std::endl; // (avoid print and use logger)
+        disconnect();
         return false;
     }
 
@@ -72,6 +77,7 @@ bool SQLClientManager::connect() {
         LOG_ERROR("SQLClientManager::connect(): SQLGetDiagRec failed. SQL State: " + std::string(reinterpret_cast<char*>(sqlState)) +
           ", Message: " + std::string(reinterpret_cast<char*>(errorMsg)));   // log error
         //std::cerr << "Connection failed. SQL State: " << sqlState << ", Message: " << errorMsg << std::endl; // (avoid print and use logger)
+        disconnect();
         return false;
     }
 

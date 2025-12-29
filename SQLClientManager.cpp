@@ -95,6 +95,16 @@ void SQLClientManager::disconnect() {
 
     LOG_INFO("SQLClientManager::disconnect(): Disconnecting SQL server."); // log info
 
+    // Free prepared statements
+    for (auto& [name, stmt] : preparedStatements) {
+        if (stmt) {
+            SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+            stmt = nullptr;
+        }
+    }
+    preparedStatements.clear();
+
+
     if (sqlConnHandle) {    // check if connected to server
         sqlReturnCode = SQLDisconnect(sqlConnHandle);   // disconnect from server
         if (sqlReturnCode == SQL_SUCCESS || sqlReturnCode == SQL_SUCCESS_WITH_INFO) {   // check if disconnection is successful
@@ -165,15 +175,16 @@ bool SQLClientManager::executeQuery(const string& query) {
 
 
 // create SQL database tables from external file
-void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
+// create SQL database tables from external file
+void SQLClientManager::createDatabaseSchema(const std::string &schemaFile) {
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting to build SQL database schema...");
 
     FileManager fileManager;
-    fileManager.loadFile(schemaFile);  // assume loadFile() is implemented
+    fileManager.loadFile(schemaFile);
 
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Loading JSON file...");
-    if (fileManager.configData.empty()) {
-        LOG_ERROR("SQLClientManager::createDatabaseSchema(): Loading JSON file failed.");
+    if (fileManager.configData.empty() || !fileManager.configData.contains("tables")) {
+        LOG_ERROR("SQLClientManager::createDatabaseSchema(): Loading JSON file failed or missing 'tables'.");
         return;
     }
 
@@ -184,202 +195,418 @@ void SQLClientManager::createDatabaseSchema(const string &schemaFile) {
     executeQuery("START TRANSACTION;");
     LOG_INFO("SQLClientManager::createDatabaseSchema(): Starting SQL transaction...");
 
-    bool success = true;  // flag to track execution success
+    bool success = true;
 
-    LOG_INFO("SQLClientManager::createDatabaseSchema(): Start iteration over tables, checking if tables already exist, if not, creating it...");
     for (const auto& table : fileManager.configData["tables"].items()) {
-        const string& tableName = table.key();
-        string createTableSQL = "CREATE TABLE IF NOT EXISTS " + tableName + " (\n";
+        const std::string& tableName = table.key();
+        const auto& tableDef = table.value();
 
-        bool firstColumn = true;
-        for (const auto& column : table.value()["columns"].items()) {
-            if (!firstColumn) {
-                createTableSQL += ",\n    ";
-            }
-            firstColumn = false;
+        std::string createTableSQL = "CREATE TABLE IF NOT EXISTS " + tableName + " (\n";
 
-            const string& columnName = column.key();
-            string columnType = column.value()["type"];
+        bool firstLine = true;
 
-            // Fix invalid types for MariaDB (same as MySQL, but ensure compatibility)
-            if (columnType == "TEXT") columnType = "VARCHAR(255)";  // use VARCHAR(255) for MariaDB
-            if (columnType == "DOUBLE") columnType = "FLOAT";      // use FLOAT for MariaDB
+        // Collect PK columns to support composite PK
+        std::vector<std::string> pkColumns;
 
-            const bool isPrimaryKey = column.value().contains("primary_key") && column.value()["primary_key"];
-            const bool isAutoIncrement = column.value().contains("auto_increment") && column.value()["auto_increment"];
-            const bool isNullable = column.value().contains("nullable") ? column.value()["nullable"].get<bool>() : true;
-            string defaultValue = column.value().contains("default") ? column.value()["default"].get<string>() : "";
+        // Columns
+        for (const auto& column : tableDef["columns"].items()) {
+            const std::string& columnName = column.key();
+            const auto& colDef = column.value();
 
-            // Build column definition
+            if (!firstLine) createTableSQL += ",\n";
+            firstLine = false;
+
+            std::string columnType = colDef["type"];
+
+            // Type mapping for MariaDB/MySQL
+            if (columnType == "TEXT")   columnType = "VARCHAR(255)";
+            if (columnType == "DOUBLE") columnType = "DOUBLE";
+            if (columnType == "BIGINT") columnType = "BIGINT";
+
+            const bool isPrimaryKey =
+                colDef.contains("primary_key") && colDef["primary_key"].get<bool>();
+            const bool isAutoIncrement =
+                colDef.contains("auto_increment") && colDef["auto_increment"].get<bool>();
+            const bool isNullable =
+                colDef.contains("nullable") ? colDef["nullable"].get<bool>() : true;
+            const bool hasDefault = colDef.contains("default");
+
             createTableSQL += "    " + columnName + " " + columnType;
+
+            if (!isNullable) createTableSQL += " NOT NULL";
+            if (isAutoIncrement) createTableSQL += " AUTO_INCREMENT";
+
+            // Default handling: do NOT quote CURRENT_TIMESTAMP
+            if (hasDefault) {
+                if (colDef["default"].is_string()) {
+                    std::string defVal = colDef["default"].get<std::string>();
+                    if (defVal == "CURRENT_TIMESTAMP") {
+                        createTableSQL += " DEFAULT CURRENT_TIMESTAMP";
+                    } else {
+                        createTableSQL += " DEFAULT '" + defVal + "'";
+                    }
+                } else if (colDef["default"].is_number_integer()) {
+                    createTableSQL += " DEFAULT " + std::to_string(colDef["default"].get<long long>());
+                } else if (colDef["default"].is_number_float()) {
+                    createTableSQL += " DEFAULT " + std::to_string(colDef["default"].get<double>());
+                } else if (colDef["default"].is_boolean()) {
+                    createTableSQL += std::string(" DEFAULT ") + (colDef["default"].get<bool>() ? "1" : "0");
+                }
+            }
+
             if (isPrimaryKey) {
-                createTableSQL += " PRIMARY KEY";
-            }
-            if (isAutoIncrement) {
-                createTableSQL += " AUTO_INCREMENT";  // use AUTO_INCREMENT for MariaDB
-            }
-            if (!isNullable) {
-                createTableSQL += " NOT NULL";
-            }
-            if (!defaultValue.empty()) {
-                createTableSQL += " DEFAULT '" + defaultValue + "'";
+                pkColumns.push_back(columnName);
             }
         }
 
-        // Handle foreign keys, ensuring MariaDB's InnoDB engine is used for foreign key support
-        if (table.value().contains("foreign_keys")) {
-            for (const auto& fk : table.value()["foreign_keys"]) {
-                createTableSQL += ",\n    FOREIGN KEY (" + fk["column"].get<string>() + ") REFERENCES " +
-                                  fk["references"]["table"].get<string>() + "(" +
-                                  fk["references"]["column"].get<string>() + ")";
+        // Foreign keys (from JSON)
+        if (tableDef.contains("foreign_keys")) {
+            for (const auto& fk : tableDef["foreign_keys"]) {
+                createTableSQL += ",\n    FOREIGN KEY (" + fk["column"].get<std::string>() + ") REFERENCES " +
+                                  fk["references"]["table"].get<std::string>() + "(" +
+                                  fk["references"]["column"].get<std::string>() + ")";
             }
         }
 
-        createTableSQL += "\n) ENGINE=InnoDB;";  // Ensure InnoDB engine is used for foreign key support in MariaDB
+        // Primary key clause (single/composite)
+        // IMPORTANT: For partitioned tables, PK must include partition column
+        if (!pkColumns.empty()) {
+            if (tableName == "object_readings") {
+                // enforce for partitioning correctness
+                createTableSQL += ",\n    PRIMARY KEY (reading_id, reading_timestamp)";
+            } else if (pkColumns.size() == 1) {
+                createTableSQL += ",\n    PRIMARY KEY (" + pkColumns[0] + ")";
+            } else {
+                createTableSQL += ",\n    PRIMARY KEY (";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                    createTableSQL += pkColumns[i];
+                    if (i + 1 < pkColumns.size()) createTableSQL += ", ";
+                }
+                createTableSQL += ")";
+            }
+        }
 
-        // Execute SQL to create table
+        // Indexes (optional from JSON)
+        if (tableDef.contains("indexes")) {
+            int idxCounter = 0;
+            for (const auto& idx : tableDef["indexes"]) {
+                if (!idx.contains("columns") || !idx["columns"].is_array()) continue;
+
+                std::string idxName = "idx_" + tableName + "_" + std::to_string(++idxCounter);
+                createTableSQL += ",\n    KEY " + idxName + " (";
+
+                for (size_t i = 0; i < idx["columns"].size(); ++i) {
+                    createTableSQL += idx["columns"][i].get<std::string>();
+                    if (i + 1 < idx["columns"].size()) createTableSQL += ", ";
+                }
+                createTableSQL += ")";
+            }
+        }
+
+        // Close definition + engine
+        createTableSQL += "\n) ENGINE=InnoDB";
+
+        // Monthly partitions from 2026-01 through 2035-12, plus pMax
+        // RANGE boundary is "LESS THAN first day of next month"
+        if (tableName == "object_readings") {
+            createTableSQL += "\nPARTITION BY RANGE COLUMNS(reading_timestamp) (\n";
+
+            // 2026
+            createTableSQL += "  PARTITION p2026_01 VALUES LESS THAN ('2026-02-01'),\n";
+            createTableSQL += "  PARTITION p2026_02 VALUES LESS THAN ('2026-03-01'),\n";
+            createTableSQL += "  PARTITION p2026_03 VALUES LESS THAN ('2026-04-01'),\n";
+            createTableSQL += "  PARTITION p2026_04 VALUES LESS THAN ('2026-05-01'),\n";
+            createTableSQL += "  PARTITION p2026_05 VALUES LESS THAN ('2026-06-01'),\n";
+            createTableSQL += "  PARTITION p2026_06 VALUES LESS THAN ('2026-07-01'),\n";
+            createTableSQL += "  PARTITION p2026_07 VALUES LESS THAN ('2026-08-01'),\n";
+            createTableSQL += "  PARTITION p2026_08 VALUES LESS THAN ('2026-09-01'),\n";
+            createTableSQL += "  PARTITION p2026_09 VALUES LESS THAN ('2026-10-01'),\n";
+            createTableSQL += "  PARTITION p2026_10 VALUES LESS THAN ('2026-11-01'),\n";
+            createTableSQL += "  PARTITION p2026_11 VALUES LESS THAN ('2026-12-01'),\n";
+            createTableSQL += "  PARTITION p2026_12 VALUES LESS THAN ('2027-01-01'),\n";
+
+            // 2027
+            createTableSQL += "  PARTITION p2027_01 VALUES LESS THAN ('2027-02-01'),\n";
+            createTableSQL += "  PARTITION p2027_02 VALUES LESS THAN ('2027-03-01'),\n";
+            createTableSQL += "  PARTITION p2027_03 VALUES LESS THAN ('2027-04-01'),\n";
+            createTableSQL += "  PARTITION p2027_04 VALUES LESS THAN ('2027-05-01'),\n";
+            createTableSQL += "  PARTITION p2027_05 VALUES LESS THAN ('2027-06-01'),\n";
+            createTableSQL += "  PARTITION p2027_06 VALUES LESS THAN ('2027-07-01'),\n";
+            createTableSQL += "  PARTITION p2027_07 VALUES LESS THAN ('2027-08-01'),\n";
+            createTableSQL += "  PARTITION p2027_08 VALUES LESS THAN ('2027-09-01'),\n";
+            createTableSQL += "  PARTITION p2027_09 VALUES LESS THAN ('2027-10-01'),\n";
+            createTableSQL += "  PARTITION p2027_10 VALUES LESS THAN ('2027-11-01'),\n";
+            createTableSQL += "  PARTITION p2027_11 VALUES LESS THAN ('2027-12-01'),\n";
+            createTableSQL += "  PARTITION p2027_12 VALUES LESS THAN ('2028-01-01'),\n";
+
+            // 2028
+            createTableSQL += "  PARTITION p2028_01 VALUES LESS THAN ('2028-02-01'),\n";
+            createTableSQL += "  PARTITION p2028_02 VALUES LESS THAN ('2028-03-01'),\n";
+            createTableSQL += "  PARTITION p2028_03 VALUES LESS THAN ('2028-04-01'),\n";
+            createTableSQL += "  PARTITION p2028_04 VALUES LESS THAN ('2028-05-01'),\n";
+            createTableSQL += "  PARTITION p2028_05 VALUES LESS THAN ('2028-06-01'),\n";
+            createTableSQL += "  PARTITION p2028_06 VALUES LESS THAN ('2028-07-01'),\n";
+            createTableSQL += "  PARTITION p2028_07 VALUES LESS THAN ('2028-08-01'),\n";
+            createTableSQL += "  PARTITION p2028_08 VALUES LESS THAN ('2028-09-01'),\n";
+            createTableSQL += "  PARTITION p2028_09 VALUES LESS THAN ('2028-10-01'),\n";
+            createTableSQL += "  PARTITION p2028_10 VALUES LESS THAN ('2028-11-01'),\n";
+            createTableSQL += "  PARTITION p2028_11 VALUES LESS THAN ('2028-12-01'),\n";
+            createTableSQL += "  PARTITION p2028_12 VALUES LESS THAN ('2029-01-01'),\n";
+
+            // 2029
+            createTableSQL += "  PARTITION p2029_01 VALUES LESS THAN ('2029-02-01'),\n";
+            createTableSQL += "  PARTITION p2029_02 VALUES LESS THAN ('2029-03-01'),\n";
+            createTableSQL += "  PARTITION p2029_03 VALUES LESS THAN ('2029-04-01'),\n";
+            createTableSQL += "  PARTITION p2029_04 VALUES LESS THAN ('2029-05-01'),\n";
+            createTableSQL += "  PARTITION p2029_05 VALUES LESS THAN ('2029-06-01'),\n";
+            createTableSQL += "  PARTITION p2029_06 VALUES LESS THAN ('2029-07-01'),\n";
+            createTableSQL += "  PARTITION p2029_07 VALUES LESS THAN ('2029-08-01'),\n";
+            createTableSQL += "  PARTITION p2029_08 VALUES LESS THAN ('2029-09-01'),\n";
+            createTableSQL += "  PARTITION p2029_09 VALUES LESS THAN ('2029-10-01'),\n";
+            createTableSQL += "  PARTITION p2029_10 VALUES LESS THAN ('2029-11-01'),\n";
+            createTableSQL += "  PARTITION p2029_11 VALUES LESS THAN ('2029-12-01'),\n";
+            createTableSQL += "  PARTITION p2029_12 VALUES LESS THAN ('2030-01-01'),\n";
+
+            // 2030
+            createTableSQL += "  PARTITION p2030_01 VALUES LESS THAN ('2030-02-01'),\n";
+            createTableSQL += "  PARTITION p2030_02 VALUES LESS THAN ('2030-03-01'),\n";
+            createTableSQL += "  PARTITION p2030_03 VALUES LESS THAN ('2030-04-01'),\n";
+            createTableSQL += "  PARTITION p2030_04 VALUES LESS THAN ('2030-05-01'),\n";
+            createTableSQL += "  PARTITION p2030_05 VALUES LESS THAN ('2030-06-01'),\n";
+            createTableSQL += "  PARTITION p2030_06 VALUES LESS THAN ('2030-07-01'),\n";
+            createTableSQL += "  PARTITION p2030_07 VALUES LESS THAN ('2030-08-01'),\n";
+            createTableSQL += "  PARTITION p2030_08 VALUES LESS THAN ('2030-09-01'),\n";
+            createTableSQL += "  PARTITION p2030_09 VALUES LESS THAN ('2030-10-01'),\n";
+            createTableSQL += "  PARTITION p2030_10 VALUES LESS THAN ('2030-11-01'),\n";
+            createTableSQL += "  PARTITION p2030_11 VALUES LESS THAN ('2030-12-01'),\n";
+            createTableSQL += "  PARTITION p2030_12 VALUES LESS THAN ('2031-01-01'),\n";
+
+            // 2031
+            createTableSQL += "  PARTITION p2031_01 VALUES LESS THAN ('2031-02-01'),\n";
+            createTableSQL += "  PARTITION p2031_02 VALUES LESS THAN ('2031-03-01'),\n";
+            createTableSQL += "  PARTITION p2031_03 VALUES LESS THAN ('2031-04-01'),\n";
+            createTableSQL += "  PARTITION p2031_04 VALUES LESS THAN ('2031-05-01'),\n";
+            createTableSQL += "  PARTITION p2031_05 VALUES LESS THAN ('2031-06-01'),\n";
+            createTableSQL += "  PARTITION p2031_06 VALUES LESS THAN ('2031-07-01'),\n";
+            createTableSQL += "  PARTITION p2031_07 VALUES LESS THAN ('2031-08-01'),\n";
+            createTableSQL += "  PARTITION p2031_08 VALUES LESS THAN ('2031-09-01'),\n";
+            createTableSQL += "  PARTITION p2031_09 VALUES LESS THAN ('2031-10-01'),\n";
+            createTableSQL += "  PARTITION p2031_10 VALUES LESS THAN ('2031-11-01'),\n";
+            createTableSQL += "  PARTITION p2031_11 VALUES LESS THAN ('2031-12-01'),\n";
+            createTableSQL += "  PARTITION p2031_12 VALUES LESS THAN ('2032-01-01'),\n";
+
+            // 2032
+            createTableSQL += "  PARTITION p2032_01 VALUES LESS THAN ('2032-02-01'),\n";
+            createTableSQL += "  PARTITION p2032_02 VALUES LESS THAN ('2032-03-01'),\n";
+            createTableSQL += "  PARTITION p2032_03 VALUES LESS THAN ('2032-04-01'),\n";
+            createTableSQL += "  PARTITION p2032_04 VALUES LESS THAN ('2032-05-01'),\n";
+            createTableSQL += "  PARTITION p2032_05 VALUES LESS THAN ('2032-06-01'),\n";
+            createTableSQL += "  PARTITION p2032_06 VALUES LESS THAN ('2032-07-01'),\n";
+            createTableSQL += "  PARTITION p2032_07 VALUES LESS THAN ('2032-08-01'),\n";
+            createTableSQL += "  PARTITION p2032_08 VALUES LESS THAN ('2032-09-01'),\n";
+            createTableSQL += "  PARTITION p2032_09 VALUES LESS THAN ('2032-10-01'),\n";
+            createTableSQL += "  PARTITION p2032_10 VALUES LESS THAN ('2032-11-01'),\n";
+            createTableSQL += "  PARTITION p2032_11 VALUES LESS THAN ('2032-12-01'),\n";
+            createTableSQL += "  PARTITION p2032_12 VALUES LESS THAN ('2033-01-01'),\n";
+
+            // 2033
+            createTableSQL += "  PARTITION p2033_01 VALUES LESS THAN ('2033-02-01'),\n";
+            createTableSQL += "  PARTITION p2033_02 VALUES LESS THAN ('2033-03-01'),\n";
+            createTableSQL += "  PARTITION p2033_03 VALUES LESS THAN ('2033-04-01'),\n";
+            createTableSQL += "  PARTITION p2033_04 VALUES LESS THAN ('2033-05-01'),\n";
+            createTableSQL += "  PARTITION p2033_05 VALUES LESS THAN ('2033-06-01'),\n";
+            createTableSQL += "  PARTITION p2033_06 VALUES LESS THAN ('2033-07-01'),\n";
+            createTableSQL += "  PARTITION p2033_07 VALUES LESS THAN ('2033-08-01'),\n";
+            createTableSQL += "  PARTITION p2033_08 VALUES LESS THAN ('2033-09-01'),\n";
+            createTableSQL += "  PARTITION p2033_09 VALUES LESS THAN ('2033-10-01'),\n";
+            createTableSQL += "  PARTITION p2033_10 VALUES LESS THAN ('2033-11-01'),\n";
+            createTableSQL += "  PARTITION p2033_11 VALUES LESS THAN ('2033-12-01'),\n";
+            createTableSQL += "  PARTITION p2033_12 VALUES LESS THAN ('2034-01-01'),\n";
+
+            // 2034
+            createTableSQL += "  PARTITION p2034_01 VALUES LESS THAN ('2034-02-01'),\n";
+            createTableSQL += "  PARTITION p2034_02 VALUES LESS THAN ('2034-03-01'),\n";
+            createTableSQL += "  PARTITION p2034_03 VALUES LESS THAN ('2034-04-01'),\n";
+            createTableSQL += "  PARTITION p2034_04 VALUES LESS THAN ('2034-05-01'),\n";
+            createTableSQL += "  PARTITION p2034_05 VALUES LESS THAN ('2034-06-01'),\n";
+            createTableSQL += "  PARTITION p2034_06 VALUES LESS THAN ('2034-07-01'),\n";
+            createTableSQL += "  PARTITION p2034_07 VALUES LESS THAN ('2034-08-01'),\n";
+            createTableSQL += "  PARTITION p2034_08 VALUES LESS THAN ('2034-09-01'),\n";
+            createTableSQL += "  PARTITION p2034_09 VALUES LESS THAN ('2034-10-01'),\n";
+            createTableSQL += "  PARTITION p2034_10 VALUES LESS THAN ('2034-11-01'),\n";
+            createTableSQL += "  PARTITION p2034_11 VALUES LESS THAN ('2034-12-01'),\n";
+            createTableSQL += "  PARTITION p2034_12 VALUES LESS THAN ('2035-01-01'),\n";
+
+            // 2035
+            createTableSQL += "  PARTITION p2035_01 VALUES LESS THAN ('2035-02-01'),\n";
+            createTableSQL += "  PARTITION p2035_02 VALUES LESS THAN ('2035-03-01'),\n";
+            createTableSQL += "  PARTITION p2035_03 VALUES LESS THAN ('2035-04-01'),\n";
+            createTableSQL += "  PARTITION p2035_04 VALUES LESS THAN ('2035-05-01'),\n";
+            createTableSQL += "  PARTITION p2035_05 VALUES LESS THAN ('2035-06-01'),\n";
+            createTableSQL += "  PARTITION p2035_06 VALUES LESS THAN ('2035-07-01'),\n";
+            createTableSQL += "  PARTITION p2035_07 VALUES LESS THAN ('2035-08-01'),\n";
+            createTableSQL += "  PARTITION p2035_08 VALUES LESS THAN ('2035-09-01'),\n";
+            createTableSQL += "  PARTITION p2035_09 VALUES LESS THAN ('2035-10-01'),\n";
+            createTableSQL += "  PARTITION p2035_10 VALUES LESS THAN ('2035-11-01'),\n";
+            createTableSQL += "  PARTITION p2035_11 VALUES LESS THAN ('2035-12-01'),\n";
+            createTableSQL += "  PARTITION p2035_12 VALUES LESS THAN ('2036-01-01'),\n";
+
+            // catch-all future
+            createTableSQL += "  PARTITION pMax VALUES LESS THAN (MAXVALUE)\n";
+            createTableSQL += ")";
+        }
+
+        createTableSQL += ";";
+
         if (!executeQuery(createTableSQL)) {
-            LOG_ERROR("SQLClientManager::createDatabaseSchema(): Failed to create table.");
-            LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");
+            LOG_ERROR("SQLClientManager::createDatabaseSchema(): Failed to create table: " + tableName);
             success = false;
-            break;  // Stop execution if one query fails
+            break;
+        } else {
+            LOG_INFO("SQLClientManager::createDatabaseSchema(): Created/verified table: " + tableName);
         }
     }
 
-    // Commit or rollback based on success status
     if (success) {
-        LOG_INFO("SQLClientManager::createDatabaseSchema(): Commit transaction.");
         executeQuery("COMMIT;");
         LOG_INFO("SQLClientManager::createDatabaseSchema(): Database schema created successfully.");
     } else {
         executeQuery("ROLLBACK;");
-        LOG_INFO("SQLClientManager::createDatabaseSchema(): Rolling back transaction.");
         LOG_ERROR("SQLClientManager::createDatabaseSchema(): Transaction rolled back due to errors.");
     }
 }
 
 
+
 // prepare insert statements for SQL query
-void SQLClientManager::prepareInsertStatements(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects) {
-
-    // data is inserted with a given frequency n where n is the order of seconds. Therefore, same SQL queries will be executed at this
-    // peace. In order to make the code faster we avoid to create the SQL statement everytime but just create it just once
-    // per each table and later just execute when needed.
-
-    LOG_INFO("SQLClientManager::prepareInsertStatements(): Preparing insert statements...");  // log info
+void SQLClientManager::prepareInsertStatements(
+    const std::unordered_map<std::string, std::unordered_map<int, float>>& tableObjects
+) {
+    LOG_INFO("SQLClientManager::prepareInsertStatements(): Preparing insert statements...");
 
     for (const auto& [tableName, records] : tableObjects) {
-        // Generate the INSERT INTO query for each table
-        std::ostringstream queryStream;
-        queryStream << "INSERT INTO " << tableName << " (object_id, object_value) VALUES (?, ?)";  // only two values needed
-        std::string query = queryStream.str();
-
-        // std::cout << "Prepared query for table '" << tableName << "': " << query << std::endl; // (avoid printing and use logger)
-        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepared query for table" + tableName + "..."); // log info
-
-        // allocate statement handle
-        SQLHSTMT stmt;
-        SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt);
-
-        // prepare the SQL statement
-        if (SQLPrepare(stmt, (SQLCHAR*)query.c_str(), SQL_NTS) != SQL_SUCCESS) {
-            // std::cerr << "Failed to prepare statement for table: " << tableName << std::endl; // (avoid printing and use logger)
-            LOG_ERROR("SQLClientManager::prepareInsertStatements(): Preparing insert statements failed.");  // log error
+        // Already prepared? Skip.
+        if (preparedStatements.find(tableName) != preparedStatements.end()) {
             continue;
         }
 
-        // Store prepared statement
+        std::string query = "INSERT INTO " + tableName + " (object_id, object_value) VALUES (?, ?)";
+
+        SQLHSTMT stmt = nullptr;
+        if (SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt) != SQL_SUCCESS) {
+            LOG_ERROR("SQLClientManager::prepareInsertStatements(): SQLAllocHandle failed for table " + tableName);
+            continue;
+        }
+
+        if (SQLPrepare(stmt, (SQLCHAR*)query.c_str(), SQL_NTS) != SQL_SUCCESS) {
+            LOG_ERROR("SQLClientManager::prepareInsertStatements(): SQLPrepare failed for table " + tableName);
+            SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+            continue;
+        }
+
         preparedStatements[tableName] = stmt;
-
-        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepare insert statement successfully for table " + tableName);  // log info
-        // std::cout << "Successfully prepared statement for table: " << tableName << std::endl; // (avoid printing and use logger)
-
+        LOG_INFO("SQLClientManager::prepareInsertStatements(): Prepared statement for table " + tableName);
     }
 }
 
 
 // insert data by input table name, object id and value from opc ua node id
-bool SQLClientManager::insertBatchData(const std::unordered_map<std::string, std::unordered_map<int, float>>& tableObjects) {
+bool SQLClientManager::insertBatchData(
+    const std::unordered_map<std::string, std::unordered_map<int, float>>& tableObjects
+) {
+    LOG_INFO("SQLClientManager::insertBatchData(): Inserting batch data...");
 
-    LOG_INFO("SQLClientManager::insertBatchData(): Inserting batch data...");  // log info
     try {
-        // start transaction with BEGIN TRANSACTION
-        LOG_INFO("SQLClientManager::insertBatchData(): START transaction.");  // log info
-
-        if (const std::string beginTransaction = "START TRANSACTION;"; !executeQuery(beginTransaction)) {
-            LOG_ERROR("SQLClientManager::insertBatchData(): Failed to begin transaction.");  // log error
-            // std::cerr << "Failed to start transaction" << std::endl; // (avoid printing and use logger)
+        if (!executeQuery("START TRANSACTION;")) {
+            LOG_ERROR("SQLClientManager::insertBatchData(): Failed to begin transaction.");
             return false;
         }
 
-        // iterate through each table and its records in tableObjects
-        LOG_INFO("SQLClientManager::insertBatchData(): Prepare statements.");
         for (const auto& [tableName, records] : tableObjects) {
-            // retrieve the prepared statement for the table
-            auto stmt = preparedStatements.find(tableName);
-            if (stmt == preparedStatements.end()) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Prepared statement not found for table " + tableName);  // log error
-                // std::cerr << "Prepared statement not found for table: " << tableName << std::endl; // (avoid printing and use logger)
-                continue; // skip to next table if the statement is not found
+            if (records.empty()) continue;
+
+            // Build multi-row query: VALUES (?, ?), (?, ?), ...
+            std::ostringstream qs;
+            qs << "INSERT INTO " << tableName << " (object_id, object_value) VALUES ";
+
+            size_t n = records.size();
+            for (size_t i = 0; i < n; ++i) {
+                qs << "(?, ?)";
+                if (i + 1 < n) qs << ", ";
             }
 
-            // get the prepared statement
-            const SQLHSTMT preparedStmt = stmt->second;
+            std::string query = qs.str();
 
-            // prepare the arrays for batch binding
-            std::vector<SQLINTEGER> data1Ind(records.size());
-            std::vector<SQLREAL> data2Ind(records.size());
-
-            // fill the data arrays for the batch
-            size_t index = 0;
-            for (const auto& [key, value] : records) {
-                data1Ind[index] = key;
-                data2Ind[index] = value;
-                ++index;
-            }
-
-            // bind the data arrays to the prepared statement (array binding)
-            SQLRETURN ret = SQLBindParameter(preparedStmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, data1Ind.data(), 0, nullptr);
+            // Prepare a statement for THIS batch (because parameter count changes each cycle)
+            SQLHSTMT stmt = nullptr;
+            SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt);
             if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind parameters (object_id).");  // log error
-                // std::cerr << "Failed to bind data1 for table: " << tableName << std::endl; // (avoid printing and use logger)
+                LOG_ERROR("SQLClientManager::insertBatchData(): SQLAllocHandle failed for table " + tableName);
                 continue;
             }
 
-            ret = SQLBindParameter(preparedStmt, 2, SQL_PARAM_INPUT, SQL_C_FLOAT, SQL_REAL, 0, 0, data2Ind.data(), 0, nullptr);
+            ret = SQLPrepare(stmt, (SQLCHAR*)query.c_str(), SQL_NTS);
             if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to bind data (object_values).");  // log error
-                // std::cerr << "Failed to bind data2 for table: " << tableName << std::endl; // (avoid printing and use logger)
+                LOG_ERROR("SQLClientManager::insertBatchData(): SQLPrepare failed for table " + tableName);
+                SQLFreeHandle(SQL_HANDLE_STMT, stmt);
                 continue;
             }
 
-            // execute the batch insert (inserting all rows at once)
-            ret = SQLExecute(preparedStmt);
-            if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-                LOG_ERROR("SQLClientManager::insertBatchData(): Failed to execute statement for table " + tableName);  // log error
-                // std::cerr << "SQLExecute failed for table: " << tableName << std::endl; // (avoid printing and use logger)
-                continue;
+            // Bind all parameters: (object_id1, value1, object_id2, value2, ...)
+            std::vector<SQLINTEGER> ids;
+            std::vector<double> vals;
+            ids.reserve(n);
+            vals.reserve(n);
+
+            for (const auto& [objectId, value] : records) {
+                ids.push_back((SQLINTEGER)objectId);
+                vals.push_back((double)value); // keep your float input but bind as double
             }
+
+            // Bind parameters. Parameter index starts at 1.
+            SQLUSMALLINT paramIndex = 1;
+            for (size_t i = 0; i < n; ++i) {
+                ret = SQLBindParameter(stmt, paramIndex++, SQL_PARAM_INPUT,
+                                       SQL_C_LONG, SQL_INTEGER, 0, 0,
+                                       &ids[i], 0, nullptr);
+                if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+                    LOG_ERROR("SQLClientManager::insertBatchData(): Bind failed (object_id) for table " + tableName);
+                    break;
+                }
+
+                ret = SQLBindParameter(stmt, paramIndex++, SQL_PARAM_INPUT,
+                                       SQL_C_DOUBLE, SQL_DOUBLE, 0, 0,
+                                       &vals[i], 0, nullptr);
+                if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+                    LOG_ERROR("SQLClientManager::insertBatchData(): Bind failed (object_value) for table " + tableName);
+                    break;
+                }
+            }
+
+            ret = SQLExecute(stmt);
+            if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+                LOG_ERROR("SQLClientManager::insertBatchData(): SQLExecute failed for table " + tableName);
+                // optional: rollback and return false, depends how strict you want to be
+            }
+
+            SQLFreeHandle(SQL_HANDLE_STMT, stmt);
         }
 
-        // commit transaction with COMMIT
-        if (const std::string commitTransaction = "COMMIT;"; !executeQuery(commitTransaction)) {
-            LOG_ERROR("SQLClientManager::insertBatchData(): Failed to commit transaction."); // log error
-            // std::cerr << "Failed to commit transaction" << std::endl; // (avoid printing and use logger)
-            throw std::runtime_error("COMMIT failed");
+        if (!executeQuery("COMMIT;")) {
+            LOG_ERROR("SQLClientManager::insertBatchData(): Failed to commit transaction.");
+            executeQuery("ROLLBACK;");
+            return false;
         }
 
         return true;
-    } catch (const std::exception& e) {
-        // rollback transaction in case of error with ROLLBACK
-        const std::string rollbackTransaction = "ROLLBACK;";
-        executeQuery(rollbackTransaction);
 
-        LOG_ERROR("SQLClientManager::insertBatchData(): Failed to rollback transaction."); // log error
-        // std::cerr << "Transaction failed: " << e.what() << std::endl; // (avoid printing and use logger)
+    } catch (const std::exception& e) {
+        executeQuery("ROLLBACK;");
+        LOG_ERROR(std::string("SQLClientManager::insertBatchData(): Exception: ") + e.what());
         return false;
     }
 }
+
 
 // insert alarm data into database
 void SQLClientManager::insertAlarm(

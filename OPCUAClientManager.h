@@ -2,121 +2,119 @@
 // Created by felipevillazon on 12/19/24.
 //
 
+//
+// Created by felipevillazon on 12/19/24.
+//
+
 #ifndef OPCUACLIENTMANAGER_H
 #define OPCUACLIENTMANAGER_H
 
-
 #include <iostream>
 #include <string>
+#include <unordered_map>
+#include <tuple>
+#include <vector>
+#include <mutex>
+#include <atomic>
+#include "FileManager.h"
+
+
 #include <open62541pp/client.hpp>
 #include <open62541pp/open62541pp.h>
-#include <chrono>
-#include <queue>
-#include "SQLClientManager.h"
 
-#include "atomic"
+#include "SQLClientManager.h"
 
 using namespace std;
 using namespace opcua;
 
-
 class SQLClientManager;  // forward declaration
 
 class OPCUAClientManager {
-
 public:
-
-    // constructor
-    explicit OPCUAClientManager(const string& endpointUrl, const string& username, const string& password, SQLClientManager& dbManager);
-
-    // destructor
+    explicit OPCUAClientManager(const string& endpointUrl,
+                                const string& username,
+                                const string& password,
+                                SQLClientManager& dbManager);
     ~OPCUAClientManager();
 
-    // connect to OPC UA Server
     bool connect();
-
-    // disconnect from OPC UA Server
     void disconnect();
 
-    // poll values from node ids asynchronously
+    // Polling for normal readings (unchanged)
     void pollNodeValues(const std::unordered_map<std::string, std::tuple<int, std::string>>& nodeMap);
-
-    // group values and objects ids by table names, also convert DataValue to float to match SQL datatype
-    // <object_node_id, <object_id, table_name, value>>
     void groupByTableName(const std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>>& monitoredNodes);
 
-    // instance UA_Client to create client
     Client client;
 
-    // stores monitored node values: <nodeId, <objectId, tableName, DataValue>>
     std::unordered_map<std::string, std::tuple<int, std::string, opcua::DataValue>> monitoredNodes;
+    std::unordered_map<std::string, std::unordered_map<int, float>> tableObjects;
 
-    // stores monitored data and group by table name <tableName, <objectId, value [[float type only]]>>
-    std::unordered_map<std::string,  std::unordered_map<int, float>> tableObjects;
+    // --------------------------
+    // Alarm subscription (NEW)
+    // --------------------------
 
-    // create and set subscription of alarm events
-    void setSubscription(const double& subscriptionInterval,const double& samplingInterval, const std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>>& alarmNodes);
+    // What type of alarm node changed?
+    enum class AlarmField { Severity, Ack, ErrorCode, Value, SystemState };
 
-    // handle severity change
-    void handleSeverityChange(const opcua::NodeId& node, int16_t newSeverity);
+    // Mapping from a NodeId to (object_id + what it represents)
+    struct AlarmNodeRef {
+        int object_id = -1;
+        int system_id = -1;     // useful for inserting alarms
+        AlarmField field = AlarmField::Severity;
+    };
 
-    // handle acknowledged flag
-    void handleAckChange(const opcua::NodeId& node, bool isAcknowledged);
+    // Cache per object_id to compare old vs new
+    struct AlarmStateCache {
+        int lastSeverity = 0;
+        bool lastAck = false;
 
-    // handle fixed flag
-    void handleFixedChange(const opcua::NodeId& node, bool isFixed);
+        int lastErrorCode = 0;
+        float lastValue = 0.0f;
+        int lastSystemState = -1;
 
-    // poll alarm-related data from OPCUA server
-    void pollAlarmNodes(const NodeId &node);
+        bool hasErrorCode = false;
+        bool hasValue = false;
+        bool hasSystemState = false;
 
-    // callback method for subscription
-    void dataChangeCallback(const opcua::NodeId &node, const opcua::DataValue &dv);
+        bool initialized = false;
 
-    // store values polled from OPC UA server alarm-related information: SEVERITY, STATE_ID, SUBSYSTEM_ID, OBJECT_ID, VALUE, ERROR_CODE
-    std::unordered_map<NodeId, std::tuple<int, int, int, int, float, int>> alarmValues;
+        bool active = false;
+        int eventId = -1;
+    };
 
-    // store values inserted into database : SEVERITY, EVENT_ID, STATE_ID, SUBSYSTEM_ID, OBJECT_ID, VALUE, ERROR_CODE
-    std::unordered_map<NodeId, std::tuple<int, int, int, int, int, float, int>> alarmDataBaseValues;
 
-    // prepare alarm data to insert into database
-    void prepareAlarmDataBaseData(const opcua::NodeId& node);
+    // This struct will come from FileManager (Step 2)
+
+
+    // Set subscription using the mapping (Step 2 will implement the .cpp changes)
+    void setSubscription(const double& subscriptionInterval,
+                       const double& samplingInterval,
+                       const std::vector<FileManager::AlarmNodeMapping>& alarmMappings);
+
+
+    // Callback entry point for subscription changes
+    void onAlarmDataChange(const opcua::NodeId& node, const opcua::DataValue& dv);
 
     std::atomic<bool> sessionAlive{false};
 
 private:
+    SQLClientManager& sqlClientManager;
 
-    SQLClientManager& sqlClientManager;  // reference to external SQL manager
-
-    // the endpoint for the client to connect to. Such as "opc.tcp://host:port".
     string endpointUrl;
-
-    // username credentials
     string username;
-
-    // password credentials
     string password;
 
+    // Lookup for callback routing: node.toString() -> AlarmNodeRef
+    std::unordered_map<std::string, AlarmNodeRef> alarmNodeLookup;
+
+    // Cache per object
+    std::unordered_map<int, AlarmStateCache> alarmCache;
+
+    // DB guard (your existing mutex)
+    std::mutex sqlMutex;
+    std::mutex alarmMutex;
     // One mutex per node
     std::unordered_map<std::string, std::mutex> nodeLocks;
-
-    opcua::NodeId severityNode, ackNode, fixedNode;
-
-    // customized structure for alarm information
-    struct AlarmEvent {
-        int eventId;        // unique event ID for the alarm occurrence
-        int16_t severity;   // last known severity level
-        bool acknowledged;  // has it been acknowledged?
-        bool fixed;         // has it been fixed?
-    };
-
-    // store active alarms  SEVERITY NODE_ID, AlarmEvent
-    std::unordered_map<opcua::NodeId, AlarmEvent> activeAlarms;
-
-    // Mutex for thread safety when accessing the database
-    std::mutex sqlMutex;
-
-
-
 };
 
-#endif //OPCUACLIENTMANAGER_H
+#endif // OPCUACLIENTMANAGER_H

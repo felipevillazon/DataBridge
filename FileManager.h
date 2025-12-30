@@ -36,16 +36,31 @@ public:
     string filename;  // path to the location of the credential file
     ordered_json configData;  // store json file content
 
-
-    std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> getNodeIdListAlarm();
-
-    // new methods 23/12/2025
-
     // If this is the first time it sees the file, it initializes state and returns false.
     bool hasFileBeenModified(const std::string& filename);
 
     // Convenience: checks if modified and reloads configData if yes.
     bool reloadFileIfModified(const std::string& filename);
+
+    struct AlarmNodeMapping {
+        int object_id = -1;
+        int system_id = -1;
+
+        opcua::NodeId severity;
+        opcua::NodeId ack;
+
+        bool has_error_code = false;
+        opcua::NodeId error_code;
+
+        bool has_value = false;
+        opcua::NodeId value;
+
+        bool has_system_state = false;
+        opcua::NodeId system_state;
+    };
+
+    std::vector<AlarmNodeMapping> getAlarmNodeMappings();
+
 
 private:
 

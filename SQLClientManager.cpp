@@ -6,6 +6,8 @@
 #include <sqlext.h>
 #include "FileManager.h"
 #include "Logger.h"
+#include <optional>
+
 
 // constructor
 SQLClientManager::SQLClientManager(const string& connectionString)
@@ -608,6 +610,8 @@ bool SQLClientManager::insertBatchData(
 }
 
 
+/*
+
 // insert alarm data into database
 void SQLClientManager::insertAlarm(
     const std::string &table,
@@ -703,5 +707,91 @@ void SQLClientManager::insertAlarm(
     // Re-enable auto-commit
     SQLSetConnectAttr(sqlConnHandle, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
 }
+
+*/
+
+
+
+// INSERT alarm row (raised)
+bool SQLClientManager::insertAlarmRaised(int alarm_severity, int event_id, int system_id, int object_id,
+                                         std::optional<int> state_id,
+                                         std::optional<float> object_value,
+                                         std::optional<int> alarm_error_code)
+{
+    const std::string sql =
+        "INSERT INTO alarms "
+        "(alarm_severity, event_id, system_id, object_id, state_id, object_value, alarm_error_code) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+    SQLHSTMT stmt{};
+    if (SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt) != SQL_SUCCESS) return false;
+    if (SQLPrepare(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) != SQL_SUCCESS) { SQLFreeHandle(SQL_HANDLE_STMT, stmt); return false; }
+
+    SQLINTEGER sev = alarm_severity;
+    SQLINTEGER eid = event_id;
+    SQLINTEGER sid = system_id;
+    SQLINTEGER oid = object_id;
+
+    SQLINTEGER st = state_id.value_or(0);
+    SQLREAL    val = object_value.value_or(0.0f);
+    SQLINTEGER err = alarm_error_code.value_or(0);
+
+    // indicators for NULL
+    SQLLEN stInd  = state_id.has_value() ? 0 : SQL_NULL_DATA;
+    SQLLEN valInd = object_value.has_value() ? 0 : SQL_NULL_DATA;
+    SQLLEN errInd = alarm_error_code.has_value() ? 0 : SQL_NULL_DATA;
+
+    SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_LONG,  SQL_INTEGER, 0, 0, &sev, 0, nullptr);
+    SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_LONG,  SQL_INTEGER, 0, 0, &eid, 0, nullptr);
+    SQLBindParameter(stmt, 3, SQL_PARAM_INPUT, SQL_C_LONG,  SQL_INTEGER, 0, 0, &sid, 0, nullptr);
+    SQLBindParameter(stmt, 4, SQL_PARAM_INPUT, SQL_C_LONG,  SQL_INTEGER, 0, 0, &oid, 0, nullptr);
+
+    SQLBindParameter(stmt, 5, SQL_PARAM_INPUT, SQL_C_LONG,  SQL_INTEGER, 0, 0, &st,  0, &stInd);
+    SQLBindParameter(stmt, 6, SQL_PARAM_INPUT, SQL_C_FLOAT, SQL_REAL,    0, 0, &val, 0, &valInd);
+    SQLBindParameter(stmt, 7, SQL_PARAM_INPUT, SQL_C_LONG,  SQL_INTEGER, 0, 0, &err, 0, &errInd);
+
+    const SQLRETURN rc = SQLExecute(stmt);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    return (rc == SQL_SUCCESS || rc == SQL_SUCCESS_WITH_INFO);
+}
+
+// UPDATE ack timestamp
+bool SQLClientManager::updateAlarmAck(int event_id)
+{
+    const std::string sql =
+        "UPDATE alarms SET ack_timestamp = NOW() "
+        "WHERE event_id = ? AND ack_timestamp IS NULL";
+
+    SQLHSTMT stmt{};
+    if (SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt) != SQL_SUCCESS) return false;
+    if (SQLPrepare(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) != SQL_SUCCESS) { SQLFreeHandle(SQL_HANDLE_STMT, stmt); return false; }
+
+    SQLINTEGER eid = event_id;
+    SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &eid, 0, nullptr);
+
+    const SQLRETURN rc = SQLExecute(stmt);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    return (rc == SQL_SUCCESS || rc == SQL_SUCCESS_WITH_INFO);
+}
+
+// UPDATE clear timestamp
+bool SQLClientManager::updateAlarmClear(int event_id)
+{
+    const std::string sql =
+        "UPDATE alarms SET clear_timestamp = NOW() "
+        "WHERE event_id = ? AND clear_timestamp IS NULL";
+
+    SQLHSTMT stmt{};
+    if (SQLAllocHandle(SQL_HANDLE_STMT, sqlConnHandle, &stmt) != SQL_SUCCESS) return false;
+    if (SQLPrepare(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) != SQL_SUCCESS) { SQLFreeHandle(SQL_HANDLE_STMT, stmt); return false; }
+
+    SQLINTEGER eid = event_id;
+    SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &eid, 0, nullptr);
+
+    const SQLRETURN rc = SQLExecute(stmt);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    return (rc == SQL_SUCCESS || rc == SQL_SUCCESS_WITH_INFO);
+}
+
 
 

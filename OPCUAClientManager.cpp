@@ -206,65 +206,82 @@ void OPCUAClientManager::groupByTableName(const std::unordered_map<std::string, 
 void OPCUAClientManager::setSubscription(
     const double& subscriptionInterval,
     const double& samplingInterval,
-    const std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>>& alarmNodes
+    const std::vector<FileManager::AlarmNodeMapping>& alarmMappings
 ) {
-    if (alarmNodes.empty()) {
-        std::cerr << "[ERROR] alarmNodes is empty. No nodes to subscribe!" << std::endl;
+    if (alarmMappings.empty()) {
+        std::cerr << "[ERROR] alarmMappings is empty. No nodes to subscribe!\n";
         return;
     }
 
-    // Create the subscription asynchronously
+    // 1) Build lookup table for routing callbacks:
+    //    node.toString() -> {object_id, system_id, field}
+    alarmNodeLookup.clear();
+
+    for (const auto& m : alarmMappings) {
+        alarmNodeLookup[m.severity.toString()] = {m.object_id, m.system_id, AlarmField::Severity};
+        alarmNodeLookup[m.ack.toString()]      = {m.object_id, m.system_id, AlarmField::Ack};
+
+        if (m.has_error_code) {
+            alarmNodeLookup[m.error_code.toString()] = {m.object_id, m.system_id, AlarmField::ErrorCode};
+        }
+        if (m.has_value) {
+            alarmNodeLookup[m.value.toString()] = {m.object_id, m.system_id, AlarmField::Value};
+        }
+        if (m.has_system_state) {
+            alarmNodeLookup[m.system_state.toString()] = {m.object_id, m.system_id, AlarmField::SystemState};
+        }
+    }
+
+    // 2) Create subscription asynchronously
     opcua::services::createSubscriptionAsync(
-        client,  // client reference
-        opcua::SubscriptionParameters{subscriptionInterval},  // subscription parameters
-        true,  // enable publishing
+        client,
+        opcua::SubscriptionParameters{subscriptionInterval},
+        true,
         {},
         [](const opcua::IntegerId subId) {
-            std::cout << "[INFO] Subscription deleted: " << subId << std::endl;
-        },  // delete callback
+            std::cout << "[INFO] Subscription deleted: " << subId << "\n";
+        },
 
-        // Capture alarmNodes by value to ensure correct access inside the async callback
-        [this, alarmNodes, subscriptionInterval, samplingInterval](opcua::CreateSubscriptionResponse& response) {
+        // Capture alarmMappings by value
+        [this, alarmMappings, samplingInterval](opcua::CreateSubscriptionResponse& response) {
             if (!response.responseHeader().serviceResult().isGood()) {
-                std::cerr << "[ERROR] Failed to create subscription. Status: " << response.responseHeader().serviceResult() << std::endl;
+                std::cerr << "[ERROR] Failed to create subscription. Status: "
+                          << response.responseHeader().serviceResult() << "\n";
                 return;
             }
 
             std::cout << "[INFO] Subscription created (ID: " << response.subscriptionId() << ")\n";
 
-            // Loop over the alarmNodes captured by value
-            for (const auto& alarm : alarmNodes) {
-                severityNode = std::get<0>(alarm);
-                ackNode = std::get<1>(alarm);
-                fixedNode = std::get<2>(alarm);
+            // 3) Create monitored items for each mapping
+            for (const auto& m : alarmMappings) {
 
-                //std::cout << "Severity Node: " << severityNode.toString() << std::endl;
-                //std::cout << "Acknowledged Node: " << ackNode.toString() << std::endl;
-                //std::cout << "Fixed Node: " << fixedNode.toString() << std::endl;
+                std::vector<opcua::NodeId> nodesToMonitor;
+                nodesToMonitor.reserve(6);
 
-                // Create monitored items for each node in the nodesToMonitor vector
-                for (std::vector<opcua::NodeId> nodesToMonitor = {severityNode, ackNode, fixedNode}; const auto& node : nodesToMonitor) {
+                nodesToMonitor.push_back(m.severity);
+                nodesToMonitor.push_back(m.ack);
+                if (m.has_error_code)    nodesToMonitor.push_back(m.error_code);
+                if (m.has_value)         nodesToMonitor.push_back(m.value);
+                if (m.has_system_state)  nodesToMonitor.push_back(m.system_state);
+
+                for (const auto& node : nodesToMonitor) {
                     opcua::services::createMonitoredItemDataChangeAsync(
                         client,
                         response.subscriptionId(),
                         opcua::ReadValueId(node, opcua::AttributeId::Value),
                         opcua::MonitoringMode::Reporting,
                         opcua::MonitoringParametersEx{.samplingInterval = samplingInterval, .queueSize = 10},
+
+                        // data change callback
                         [this, node](opcua::IntegerId, opcua::IntegerId, const opcua::DataValue& dv) {
-
-                            //std::cout << "Node " << node.toString() << " has changed its value." << std::endl;
-
-                            //cout << "Identifier is:" << node.identifier<uint32_t>() +100 << endl;
-                            // Optionally, store the new value or set a flag for processing
-                            dataChangeCallback(node, dv);
-
-
+                            this->onAlarmDataChange(node, dv);
                         },
+
                         {},
                         [](opcua::MonitoredItemCreateResult& result) {
                             if (!result.statusCode().isGood()) {
                                 std::cerr << "[ERROR] Failed to create monitored item. Status: "
-                                          << result.statusCode() << std::endl;
+                                          << result.statusCode() << "\n";
                             } else {
                                 std::cout << "[INFO] MonitoredItem created (ID: "
                                           << result.monitoredItemId() << ")\n";
@@ -278,6 +295,104 @@ void OPCUAClientManager::setSubscription(
 }
 
 
+void OPCUAClientManager::onAlarmDataChange(const opcua::NodeId& node, const opcua::DataValue& dv)
+{
+    if (!dv.hasValue()) return;
+
+    const std::string key = node.toString();
+
+    AlarmNodeRef ref;
+    {
+        std::lock_guard<std::mutex> lk(alarmMutex);
+        auto it = alarmNodeLookup.find(key);
+        if (it == alarmNodeLookup.end()) return; // unknown node
+        ref = it->second;
+    }
+
+    std::lock_guard<std::mutex> lk(alarmMutex);
+    auto& cache = alarmCache[ref.object_id];
+
+
+    // first time init: keep defaults but mark initialized
+    if (!cache.initialized) {
+        cache.initialized = true;
+        cache.lastSeverity = 0;
+        cache.lastAck = false;
+        cache.active = false;
+        cache.eventId = -1;
+    }
+
+    // --- update cache field ---
+    switch (ref.field) {
+        case AlarmField::Severity: {
+            const int newSev = dv.value().to<int16_t>();
+            const int oldSev = cache.lastSeverity;
+            cache.lastSeverity = newSev;
+
+            // RAISE: 0 -> >0
+            if (oldSev == 0 && newSev > 0) {
+                const int eventId = Helper::generateEventId("/home/felipevillazon/Xelips/alarmEventID.txt");
+                cache.eventId = eventId;
+                cache.active = true;
+
+                // Build optional fields
+                std::optional<int> st = cache.hasSystemState ? std::optional<int>(cache.lastSystemState) : std::nullopt;
+                std::optional<float> val = cache.hasValue ? std::optional<float>(cache.lastValue) : std::nullopt;
+                std::optional<int> err = cache.hasErrorCode ? std::optional<int>(cache.lastErrorCode) : std::nullopt;
+
+                sqlClientManager.insertAlarmRaised(
+                    newSev,
+                    eventId,
+                    ref.system_id,
+                    ref.object_id,
+                    st, val, err
+                );
+            }
+
+            // CLEAR: >0 -> 0
+            if (oldSev > 0 && newSev == 0 && cache.active && cache.eventId != -1) {
+                sqlClientManager.updateAlarmClear(cache.eventId);
+                cache.active = false;
+                cache.eventId = -1;
+                cache.lastAck = false; // optional reset
+            }
+            break;
+        }
+
+        case AlarmField::Ack: {
+            const bool newAck = dv.value().to<bool>();
+            const bool oldAck = cache.lastAck;
+            cache.lastAck = newAck;
+
+            // ACK: false -> true while active
+            if (!oldAck && newAck && cache.active && cache.eventId != -1) {
+                sqlClientManager.updateAlarmAck(cache.eventId);
+            }
+            break;
+        }
+
+        case AlarmField::ErrorCode: {
+            cache.hasErrorCode = true;
+            cache.lastErrorCode = dv.value().to<int32_t>();
+            break;
+        }
+
+        case AlarmField::Value: {
+            cache.hasValue = true;
+            cache.lastValue = dv.value().to<float>();
+            break;
+        }
+
+        case AlarmField::SystemState: {
+            cache.hasSystemState = true;
+            cache.lastSystemState = dv.value().to<int32_t>();
+            break;
+        }
+    }
+}
+
+
+/*
 // handle severity change
 void OPCUAClientManager::handleSeverityChange(const opcua::NodeId& node, const int16_t newSeverity) {
 
@@ -505,3 +620,5 @@ void OPCUAClientManager::prepareAlarmDataBaseData(const opcua::NodeId& node) {
         cout << "something wrong with node id in alarmValues" << endl;
     }
 }
+
+*/

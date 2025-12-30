@@ -86,7 +86,6 @@ bool connectToSQL(SQLClientManager& sql_client_manager) {
 bool connectToOPCUA(OPCUAClientManager& opcua_client_manager) {
     while (keepRunning) {
         if (opcua_client_manager.connect()) {
-            // If connect() already sets this, it's harmless to set again.
             opcua_client_manager.sessionAlive = true;
             ::LOG_INFO("OPC UA connected.");
             return true;
@@ -105,7 +104,6 @@ void runDataProcessingLoop(OPCUAClientManager& opcua_client_manager,
                            FileManager& file_manager,
                            const std::string& nodeIdFile)
 {
-    // Per-thread timer (NOT static)
     auto lastCheck = std::chrono::steady_clock::now();
 
     while (keepRunning && opcua_client_manager.client.isConnected() && opcua_client_manager.sessionAlive) {
@@ -124,6 +122,9 @@ void runDataProcessingLoop(OPCUAClientManager& opcua_client_manager,
                         mappedDataPtr = std::move(newMap);
                     }
                     ::LOG_INFO("Reloaded nodeId map from: " + nodeIdFile);
+
+                    // NOTE: we are NOT hot-reloading alarm subscription here (yet).
+                    // That would be a separate step: detect changes -> rebuild subscription.
                 }
             }
 
@@ -143,9 +144,7 @@ void runDataProcessingLoop(OPCUAClientManager& opcua_client_manager,
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
-            constexpr long long POLL_PERIOD_US = 5'000'000; // 5 seconds
-
-            // 1s loop target
+            constexpr long long POLL_PERIOD_US = 5'000'000; // 5 seconds (your sampling frequency)
             long long sleepUs = std::max<long long>(0, POLL_PERIOD_US - duration.count());
             std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         }
@@ -180,7 +179,6 @@ void startOPCUAClientThread(const std::vector<std::string>& opcua_credentials,
 
     ::LOG_INFO("PLC thread started for endpoint: " + opcua_credentials.at(0));
 
-    // Outer loop: reconnect forever unless shutdown
     while (keepRunning) {
 
         // Ensure SQL connected (per PLC)
@@ -197,10 +195,17 @@ void startOPCUAClientThread(const std::vector<std::string>& opcua_credentials,
         auto mappedDataPtr = std::make_shared<MapType>(file_manager.mapNodeIdToObjectId());
         std::mutex mappedMutex;
 
-        // Alarm subscription (still static until you later implement alarm hot-reload)
-        const auto alarmNodeIds = file_manager.getNodeIdListAlarm();
-        opcua_client_manager.setSubscription(100, 100, alarmNodeIds);
-        ::LOG_INFO("Alarm node IDs loaded: " + std::to_string(alarmNodeIds.size()));
+        // -----------------------
+        // ALARMS (integrated here)
+        // -----------------------
+        // IMPORTANT: this must match your NEW FileManager method + NEW OPCUA subscription signature.
+        // - file_manager.getAlarmNodeMappings() returns vector<AlarmNodeMapping/AlarmMapping>
+        // - opcua_client_manager.setSubscription(interval, sampling, mappings)
+        {
+            const auto alarmMappings = file_manager.getAlarmNodeMappings();
+            opcua_client_manager.setSubscription(100, 100, alarmMappings);
+            ::LOG_INFO("Alarm mappings loaded: " + std::to_string(alarmMappings.size()));
+        }
 
         // Run until disconnected
         runDataProcessingLoop(opcua_client_manager, sql_client_manager, mappedDataPtr, mappedMutex, file_manager, nodeIdFile);
@@ -208,7 +213,6 @@ void startOPCUAClientThread(const std::vector<std::string>& opcua_credentials,
         if (!keepRunning) break;
 
         ::LOG_INFO("PLC thread: connection lost, retrying in 2 seconds...");
-        // Ensure we flag session dead; connect() will set it alive again.
         opcua_client_manager.sessionAlive = false;
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
@@ -218,9 +222,6 @@ void startOPCUAClientThread(const std::vector<std::string>& opcua_credentials,
 void initialize() {
     try {
         setupLogger();
-
-        unsigned int n_threads = std::thread::hardware_concurrency();
-        std::cout << "Recommended threads: " << n_threads << std::endl;
 
         FileManager file_manager;
         std::vector<std::string> sql_credentials, opcua_credentials_plc_1, opcua_credentials_plc_2,
@@ -237,6 +238,20 @@ void initialize() {
         SQLClientManager sql_client_manager_2(sql_string);
         SQLClientManager sql_client_manager_3(sql_string);
         SQLClientManager sql_client_manager_4(sql_string);
+
+        // ----------------------------
+        // CREATE DB SCHEMA ONCE (HERE)
+        // ----------------------------
+        // Do it once at startup. If tables already exist, your method uses IF NOT EXISTS, so safe.
+        {
+            const std::string schemaFile = "/home/felipevillazon/Xelips/dbSchema.JSON"; // <-- adjust if needed
+            if (!connectToSQL(sql_client_manager_1)) {
+                ::LOG_ERROR("Cannot connect to SQL to create schema. Exiting initialization.");
+                return;
+            }
+            sql_client_manager_1.createDatabaseSchema(schemaFile);
+            ::LOG_INFO("Schema creation done (or verified).");
+        }
 
         const std::string nodeIdFile_PLC_1 = "/home/felipe/nodeId.plc_1.JSON";
         const std::string nodeIdFile_PLC_2 = "/home/felipe/nodeId.plc_2.JSON";

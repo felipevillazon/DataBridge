@@ -9,6 +9,9 @@
 #include <string>
 #include <regex>
 #include "Logger.h"
+#include <fstream>
+#include <mutex>
+#include <stdexcept>
 
 // constructor
 Helper::Helper() {;}
@@ -66,25 +69,36 @@ std::array<int, 2> Helper::getNodeIdInfo(const std::string& nodeId) {
 }
 
 // generated unique event id for alarm events
-int Helper::generateEventId(const std::string &filename) {
+int Helper::generateEventId(const std::string& filename) {
+    static std::mutex mtx;                 // thread-safe inside one process
+    std::lock_guard<std::mutex> lock(mtx);
 
-    int lastID = 0;  // initialize lastID variable
+    int lastID = 0;
 
-    // read the last event_id from the file
-    if (std::ifstream infile(filename); infile.is_open()) {
-        infile >> lastID;  // read the stored ID
-        infile.close();
+    // Read last ID (if file doesn't exist, start at 0)
+    {
+        std::ifstream infile(filename);
+        if (infile.is_open()) {
+            infile >> lastID;
+        }
     }
 
-    // increment the ID
-    int newID = lastID + 1;  // update last event id
+    const int newID = lastID + 1;
 
-    // save the new ID back to the file
-    if (std::ofstream outfile(filename); outfile.is_open()) {
+    // Write using a simple overwrite (you can also do temp+rename for extra safety)
+    {
+        std::ofstream outfile(filename, std::ios::trunc);
+        if (!outfile.is_open()) {
+            throw std::runtime_error("Helper::generateEventId(): cannot open event id file for writing: " + filename);
+        }
         outfile << newID;
-        outfile.close();
+        outfile.flush();
+        if (!outfile.good()) {
+            throw std::runtime_error("Helper::generateEventId(): failed writing event id to: " + filename);
+        }
     }
 
-    return newID;  // return new event id
+    return newID;
 }
+
 

@@ -9,13 +9,13 @@
 #include <filesystem>
 #include <system_error>
 
-// constructor
+// constructor - IN USED
 FileManager::FileManager()  {;}
 
-// destructor
+// destructor - IN USED
 FileManager::~FileManager() {;}
 
-// load config file with server settings
+// load config file with server settings - IN USED
 void FileManager::loadFile(const string& filename) {
 
   /* loadConfig try to open the configuration file which is located somewhere in the machine */
@@ -39,7 +39,7 @@ void FileManager::loadFile(const string& filename) {
   // std::cout << "Configuration successfully loaded from " << filename << std::endl;   // message if parsing was done successfully // (avoid printing and use logger)
   }
 
-// retrieve OPC Server login data
+// retrieve OPC Server login data - IN USED
 vector<string> FileManager::getOPCUAServerDetails(const std::string& plc) {
 
     /* This method retrieves the OPC UA server credentials for the specified PLC from the configuration file
@@ -100,8 +100,7 @@ vector<string> FileManager::getOPCUAServerDetails(const std::string& plc) {
     return credentialsOPCUA;  // Return vector with credentials for the specified PLC
 }
 
-
-// retrieve SQL database login data
+// retrieve SQL database login data - IN USED
 vector<string> FileManager::getSQLConnectionDetails() {
 
   /* This method retrieve the SQL server credentials from the configuration server and return a vector with the information */
@@ -172,98 +171,74 @@ vector<string> FileManager::getSQLConnectionDetails() {
     return credentialsSQL; // return vector
 }
 
-// map object_node_id to object_id and table_name
+// map object_node_id to object_id and table_name - IN USED
 std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNodeIdToObjectId() {
+    ::LOG_INFO("FileManager::mapNodeIdToObjectId(): Building nodeId -> (object_id, table_name) map...");
 
-  LOG_INFO("FileManager::mapNodeIdToObjectId(): Starting mapping between nodeId, objectId, and tableName...");  // log info
+    // Keep your interface (minimal changes in rest of code)
+    std::unordered_map<std::string, std::tuple<int, std::string>> nodeIdMap;
 
-  // <object_node_id , object_id, table_name>
-  std::unordered_map<std::string, std::tuple<int, std::string>> nodeIdMap;  // Map to store results
+    // Force a constant readings table (you can change it in one place later)
+    static constexpr auto READINGS_TABLE = "object_readings";
 
-  // <object_node_id , object_id, table_name>
-  std::vector<std::pair<std::string, std::tuple<int, std::string>>> batchData;  // Temporary batch container
-
-  // iterate dynamically through the JSON structure
-  for (const auto& [_, category] : configData.items()) {
-    if (!category.is_object()) continue;
-
-    for (const auto& [_, entry] : category.items()) {
-      if (!entry.is_object() || !entry.contains("columns") || !entry["columns"].is_object()) continue;
-
-      const auto& columns = entry["columns"];
-      int objectId = -1 ;
-      std::string nodeId;
-      std::string tableName;
-
-      // Extract primaryId (first integer found), nodeId, and tableName
-      for (auto it = columns.begin(); it != columns.end(); ++it) {
-        if (it.key() == "object_id" && it.value().is_number_integer()) {    // getting object_id to identify object-nodeid relation
-          objectId = it.value().get<int>();               // getting integer
-        }
-        if (it.key() == "object_node_id" && it.value().is_string()) {   // getting object_node_id to get object value from opcua server
-          nodeId = it.value().get<std::string>();   // node id string
-        }
-        if (it.key() == "table_name" && it.value().is_string()) {      // getting table_name to realize reading table to later insert
-          tableName = it.value().get<std::string>();    // table name string
-        }
-      }
-
-      // only store valid entries
-      if (!nodeId.empty() && objectId >= 0 && !tableName.empty()) {
-        batchData.emplace_back(nodeId, std::make_tuple(objectId, tableName));
-      }
-
+    // Validate expected structure
+    if (!configData.contains("objects") || !configData["objects"].is_object()) {
+        ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): Missing or invalid 'objects' section in JSON.");
+        return nodeIdMap;
     }
-  }
 
-  // bulk insert into unordered_map
-  nodeIdMap.insert(batchData.begin(), batchData.end());
+    // Iterate ONLY objects
+    for (const auto& [objectKey, entry] : configData["objects"].items()) {
+        if (!entry.is_object()) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' is not a JSON object. Skipping.");
+            continue;
+        }
 
-  return nodeIdMap;
+        if (!entry.contains("columns") || !entry["columns"].is_object()) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' missing 'columns'. Skipping.");
+            continue;
+        }
+
+        const auto& columns = entry["columns"];
+
+        // Required fields
+        int objectId = -1;
+        std::string nodeId;
+
+        if (columns.contains("object_id") && columns["object_id"].is_number_integer()) {
+            objectId = columns["object_id"].get<int>();
+        } else {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' missing/invalid 'object_id'. Skipping.");
+            continue;
+        }
+
+        if (columns.contains("object_node_id") && columns["object_node_id"].is_string()) {
+            nodeId = columns["object_node_id"].get<std::string>();
+        } else {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' missing/invalid 'object_node_id'. Skipping.");
+            continue;
+        }
+
+        if (nodeId.empty() || objectId < 0) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' has empty nodeId or invalid objectId. Skipping.");
+            continue;
+        }
+
+        // Insert mapping (if duplicates exist, last wins — we also log it)
+        auto it = nodeIdMap.find(nodeId);
+        if (it != nodeIdMap.end()) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): Duplicate object_node_id '" + nodeId +
+                        "' found. Overwriting previous mapping.");
+        }
+
+        nodeIdMap[nodeId] = std::make_tuple(objectId, std::string(READINGS_TABLE));
+    }
+
+    ::LOG_INFO("FileManager::mapNodeIdToObjectId(): Done. Loaded " + std::to_string(nodeIdMap.size()) + " mappings.");
+    return nodeIdMap;
 }
 
-
-// map severity node_id, acknowledged_node_id and fixed_node_id from file
-// Implementation of getNodeIdListAlarm
-std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> FileManager::getNodeIdListAlarm() {
-  std::vector<std::tuple<opcua::NodeId, opcua::NodeId, opcua::NodeId>> alarmRelatedNodeId;
-
-  // Check if the "sensors" key exists in the configData
-  if (configData.contains("objects")) {
-    // Iterate through all sensors
-    for (const auto& objectItem : configData["objects"].items()) {
-      const auto& object = objectItem.value();  // Get the sensor data
-
-      // Check if "alarm" exists and has the required columns
-      if (object.contains("alarm") && object["alarm"].contains("columns")) {
-        const auto& alarmColumns = object["alarm"]["columns"];
-
-        // Ensure all three required node_ids are available
-        if (alarmColumns.contains("severity_node_id") &&
-            alarmColumns.contains("acknowledged_node_id") &&
-            alarmColumns.contains("fixed_node_id")) {
-
-          // Create NodeId instances and store them in the tuple
-          std::array<int, 2> severityInfo = Helper::getNodeIdInfo(alarmColumns["severity_node_id"].get<std::string>());
-          std::array<int, 2> acknowledgedInfo = Helper::getNodeIdInfo(alarmColumns["acknowledged_node_id"].get<std::string>());
-          std::array<int, 2> fixedInfo = Helper::getNodeIdInfo(alarmColumns["fixed_node_id"].get<std::string>());
-
-          // Now, create the NodeId instances using the extracted namespace and identifier
-          opcua::NodeId severityNodeId(severityInfo[0], severityInfo[1]);  // severityInfo[0] is namespaceIndex, severityInfo[1] is identifier
-          opcua::NodeId acknowledgedNodeId(acknowledgedInfo[0], acknowledgedInfo[1]); // Same for acknowledged node
-          opcua::NodeId fixedNodeId(fixedInfo[0], fixedInfo[1]); // Same for fixed node
-
-          // Add the tuple to the result vector
-          alarmRelatedNodeId.emplace_back(severityNodeId, acknowledgedNodeId, fixedNodeId);
-            }
-      }
-    }
-  }
-
-  return alarmRelatedNodeId;
-}
-
-// check if file has been modified
+// check if file has been modified - IN USED
 bool FileManager::hasFileBeenModified(const std::string& filename) {
   std::lock_guard<std::mutex> lock(fileWatchMutex_);
 
@@ -296,7 +271,7 @@ bool FileManager::hasFileBeenModified(const std::string& filename) {
   return false;
 }
 
-// Check if file has been modified and reload if necessary
+// Check if file has been modified and reload if necessary - IN USED
 bool FileManager::reloadFileIfModified(const std::string& filename) {
   if (!hasFileBeenModified(filename)) return false;
 
@@ -308,6 +283,90 @@ bool FileManager::reloadFileIfModified(const std::string& filename) {
     LOG_ERROR(std::string("reloadFileIfModified(): reload failed, keeping old config. Reason: ") + e.what());
     return false;
   }
+}
+
+// map severity node_id, acknowledged_node_id and fixed_node_id from file - IN USED
+std::vector<FileManager::AlarmNodeMapping> FileManager::getAlarmNodeMappings() {
+    std::vector<AlarmNodeMapping> out;
+
+    // Support both keys: "objects" or "sensors"
+    const char* rootKey = nullptr;
+    if (configData.contains("objects")) rootKey = "objects";
+    else if (configData.contains("sensors")) rootKey = "sensors";
+
+    if (!rootKey) {
+        LOG_ERROR("FileManager::getAlarmNodeMappings(): No 'objects' or 'sensors' section found.");
+        return out;
+    }
+
+    for (const auto& item : configData[rootKey].items()) {
+        const auto& obj = item.value();
+
+        if (!obj.contains("columns") || !obj["columns"].is_object()) continue;
+
+        const auto& cols = obj["columns"];
+        const int objectId = cols.contains("object_id") && cols["object_id"].is_number_integer()
+                                 ? cols["object_id"].get<int>()
+                                 : -1;
+        const int systemId = cols.contains("system_id") && cols["system_id"].is_number_integer()
+                                 ? cols["system_id"].get<int>()
+                                 : -1;
+
+        if (!obj.contains("alarm") || !obj["alarm"].contains("columns")) continue;
+        const auto& alarmCols = obj["alarm"]["columns"];
+
+        // required
+        if (!alarmCols.contains("severity_node_id")) continue;
+
+        // ack naming: support both
+        const bool hasAck =
+            alarmCols.contains("ack_node_id") || alarmCols.contains("acknowledged_node_id");
+        if (!hasAck) continue;
+
+        const std::string severityStr = alarmCols["severity_node_id"].get<std::string>();
+        const std::string ackStr = alarmCols.contains("ack_node_id")
+                                       ? alarmCols["ack_node_id"].get<std::string>()
+                                       : alarmCols["acknowledged_node_id"].get<std::string>();
+
+        const auto sevInfo = Helper::getNodeIdInfo(severityStr);
+        const auto ackInfo = Helper::getNodeIdInfo(ackStr);
+
+        AlarmNodeMapping m;
+        m.object_id = objectId;
+        m.system_id = systemId;
+        m.severity = opcua::NodeId(sevInfo[0], sevInfo[1]);
+        m.ack = opcua::NodeId(ackInfo[0], ackInfo[1]);
+
+        // optional error_code
+        if (alarmCols.contains("error_code_node_id")) {
+            const std::string errStr = alarmCols["error_code_node_id"].get<std::string>();
+            const auto errInfo = Helper::getNodeIdInfo(errStr);
+            m.has_error_code = true;
+            m.error_code = opcua::NodeId(errInfo[0], errInfo[1]);
+        }
+
+        // optional value
+        // (you can name this in JSON "value_node_id" or reuse "object_node_id" - choose one)
+        if (alarmCols.contains("value_node_id")) {
+            const std::string valStr = alarmCols["value_node_id"].get<std::string>();
+            const auto valInfo = Helper::getNodeIdInfo(valStr);
+            m.has_value = true;
+            m.value = opcua::NodeId(valInfo[0], valInfo[1]);
+        }
+
+        // optional system_state (for system alarms)
+        if (alarmCols.contains("system_state_node_id")) {
+            const std::string stStr = alarmCols["system_state_node_id"].get<std::string>();
+            const auto stInfo = Helper::getNodeIdInfo(stStr);
+            m.has_system_state = true;
+            m.system_state = opcua::NodeId(stInfo[0], stInfo[1]);
+        }
+
+        out.push_back(std::move(m));
+    }
+
+    LOG_INFO("FileManager::getAlarmNodeMappings(): Loaded " + std::to_string(out.size()) + " alarm mappings.");
+    return out;
 }
 
 

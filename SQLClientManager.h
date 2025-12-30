@@ -32,6 +32,17 @@ public:
     bool insertBatchData(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects); // insert batch data into tables
     void insertAlarm(const string& table, const unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values, const string &type);  // insert alarm into table Alarms
 
+    // =====  NEW METHODS =====
+    bool insertAlarmRaised(int alarm_severity, int event_id, int system_id, int object_id,
+                      std::optional<int> state_id,
+                      std::optional<float> object_value,
+                      std::optional<int> alarm_error_code);
+
+    bool updateAlarmAck(int event_id);
+    bool updateAlarmClear(int event_id);
+
+
+
 private:
     SQLHANDLE sqlEnvHandle; // environment handle
     SQLHANDLE sqlConnHandle; // connection handle

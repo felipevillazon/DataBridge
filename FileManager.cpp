@@ -369,6 +369,91 @@ std::vector<FileManager::AlarmNodeMapping> FileManager::getAlarmNodeMappings() {
     return out;
 }
 
+// Convenience: detect which root table exists (systems/plcs/equipment/objects)
+std::optional<std::string> FileManager::detectSingleRootTable() const {
+    // If file contains exactly one root key, return it.
+    // Helps when you load "systems.json" and want to auto-detect "systems".
+    if (!configData.is_object()) return std::nullopt;
+
+    std::string found;
+    int count = 0;
+
+    for (auto it = configData.begin(); it != configData.end(); ++it) {
+        if (!it.value().is_object()) continue;
+        found = it.key();
+        ++count;
+    }
+
+    if (count == 1) return found;
+    return std::nullopt;
+}
+
+// Convenience: extract rows from a static table JSON file
+std::vector<FileManager::Row> FileManager::extractTableRows(const std::string& tableName) const {
+    std::vector<Row> rows;
+
+    if (!configData.contains(tableName) || !configData[tableName].is_object()) {
+        LOG_ERROR("FileManager::extractTableRows(): Missing or invalid root key: " + tableName);
+        return rows;
+    }
+
+    const auto& root = configData[tableName];
+
+    for (const auto& item : root.items()) {
+        const auto& entry = item.value();
+        if (!entry.contains("columns") || !entry["columns"].is_object()) continue;
+
+        const auto& cols = entry["columns"];
+        Row row;
+
+        for (auto it = cols.begin(); it != cols.end(); ++it) {
+            const std::string colName = it.key();
+            const auto& v = it.value();
+
+            if (v.is_null()) {
+                row[colName] = nullptr;
+            } else if (v.is_boolean()) {
+                row[colName] = v.get<bool>();
+            } else if (v.is_number_integer()) {
+                row[colName] = static_cast<long long>(v.get<long long>());
+            } else if (v.is_number_float()) {
+                row[colName] = static_cast<double>(v.get<double>());
+            } else if (v.is_string()) {
+                row[colName] = v.get<std::string>();
+            } else {
+                // For objects/arrays, store as JSON text (safe fallback)
+                row[colName] = v.dump();
+            }
+        }
+
+        rows.push_back(std::move(row));
+    }
+
+    LOG_INFO("FileManager::extractTableRows(): Extracted " + std::to_string(rows.size()) +
+             " rows from table '" + tableName + "'");
+    return rows;
+}
+
+// Convenience: extract rows from a static table JSON file
+std::vector<ordered_json> FileManager::getStaticRows(const std::string& tableKey) const {
+    std::vector<ordered_json> rows;
+
+    if (!configData.contains(tableKey) || !configData[tableKey].is_object()) {
+        LOG_ERROR("FileManager::getStaticRows(): missing or invalid key: " + tableKey);
+        return rows;
+    }
+
+    for (const auto& item : configData[tableKey].items()) {
+        const auto& entry = item.value();
+        if (!entry.contains("columns") || !entry["columns"].is_object()) continue;
+        rows.push_back(entry["columns"]);
+    }
+
+    LOG_INFO("FileManager::getStaticRows(): Loaded " + std::to_string(rows.size()) +
+             " rows from section '" + tableKey + "'");
+    return rows;
+}
+
 
 
 

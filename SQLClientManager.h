@@ -30,7 +30,7 @@ public:
     bool executeQuery(const string& query); // execute query using string queries
     void prepareInsertStatements(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects); // prepare insert statements
     bool insertBatchData(const std::unordered_map<std::string,  std::unordered_map<int, float>>& tableObjects); // insert batch data into tables
-    void insertAlarm(const string& table, const unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values, const string &type);  // insert alarm into table Alarms
+    //void insertAlarm(const string& table, const unordered_map<opcua::NodeId, std::tuple<int, int, int, int, int, float, int>>& values, const string &type);  // insert alarm into table Alarms
 
     // =====  NEW METHODS =====
     bool insertAlarmRaised(int alarm_severity, int event_id, int system_id, int object_id,
@@ -40,6 +40,14 @@ public:
 
     bool updateAlarmAck(int event_id);
     bool updateAlarmClear(int event_id);
+
+    bool upsertStaticTableFromFile(const std::string& tableName,
+                               const std::string& tableKey,
+                               const std::string& jsonFile,
+                               const std::string& primaryKeyColumn);
+
+
+
 
 
 

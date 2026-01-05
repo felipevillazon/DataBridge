@@ -795,3 +795,119 @@ bool SQLClientManager::updateAlarmClear(int event_id)
 
 
 
+// new
+
+// Escape single quotes in strings for SQL
+static std::string sqlEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        if (c == '\'') out += "''";
+        else out += c;
+    }
+    return out;
+}
+
+
+static std::string sqlValueFromJson(const ordered_json& v) {
+    // Convert JSON value to SQL literal (trusted local config files).
+    if (v.is_null()) return "NULL";
+    if (v.is_boolean()) return v.get<bool>() ? "1" : "0";
+    if (v.is_number_integer()) return std::to_string(v.get<long long>());
+    if (v.is_number_float()) return std::to_string(v.get<double>());
+    if (v.is_string()) return "'" + sqlEscape(v.get<std::string>()) + "'";
+    // Fallback: stringify
+    return "'" + sqlEscape(v.dump()) + "'";
+}
+
+bool SQLClientManager::upsertStaticTableFromFile(const std::string& tableName,
+                                                 const std::string& tableKey,
+                                                 const std::string& jsonFile,
+                                                 const std::string& primaryKeyColumn)
+{
+    LOG_INFO("SQLClientManager::upsertStaticTableFromFile(): table=" + tableName +
+             " file=" + jsonFile);
+
+    FileManager fm;
+    fm.loadFile(jsonFile);
+
+    const auto rows = fm.getStaticRows(tableKey);
+    if (rows.empty()) {
+        LOG_ERROR("SQLClientManager::upsertStaticTableFromFile(): no rows found for key: " + tableKey);
+        return false;
+    }
+
+    // One transaction for the whole file
+    if (!executeQuery("START TRANSACTION;")) {
+        LOG_ERROR("SQLClientManager::upsertStaticTableFromFile(): START TRANSACTION failed");
+        return false;
+    }
+
+    bool ok = true;
+
+    for (const auto& row : rows) {
+        if (!row.contains(primaryKeyColumn)) {
+            LOG_ERROR("SQLClientManager::upsertStaticTableFromFile(): row missing PK '" +
+                      primaryKeyColumn + "' for table " + tableName);
+            ok = false;
+            break;
+        }
+
+        // Build INSERT columns/values from the JSON keys (columns object)
+        std::vector<std::string> cols;
+        cols.reserve(row.size());
+
+        for (auto it = row.begin(); it != row.end(); ++it) {
+            cols.push_back(it.key());
+        }
+
+        // INSERT INTO table (c1,c2,...) VALUES (v1,v2,...)
+        std::string sql = "INSERT INTO " + tableName + " (";
+        for (size_t i = 0; i < cols.size(); ++i) {
+            sql += cols[i];
+            if (i + 1 < cols.size()) sql += ", ";
+        }
+        sql += ") VALUES (";
+        for (size_t i = 0; i < cols.size(); ++i) {
+            sql += sqlValueFromJson(row.at(cols[i]));
+            if (i + 1 < cols.size()) sql += ", ";
+        }
+        sql += ") ON DUPLICATE KEY UPDATE ";
+
+        // UPDATE all non-PK columns to VALUES(col)
+        bool firstUpd = true;
+        for (const auto& c : cols) {
+            if (c == primaryKeyColumn) continue;
+            if (!firstUpd) sql += ", ";
+            firstUpd = false;
+            sql += c + " = VALUES(" + c + ")";
+        }
+
+        // If the row only has PK, avoid invalid SQL:
+        if (firstUpd) {
+            sql += primaryKeyColumn + " = " + primaryKeyColumn;
+        }
+
+        sql += ";";
+
+        if (!executeQuery(sql)) {
+            LOG_ERROR("SQLClientManager::upsertStaticTableFromFile(): failed upsert into " +
+                      tableName);
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok) {
+        executeQuery("COMMIT;");
+        LOG_INFO("SQLClientManager::upsertStaticTableFromFile(): upsert completed for table " + tableName);
+        return true;
+    }
+
+    executeQuery("ROLLBACK;");
+    LOG_ERROR("SQLClientManager::upsertStaticTableFromFile(): rolled back for table " + tableName);
+    return false;
+}
+
+
+

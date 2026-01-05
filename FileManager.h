@@ -61,6 +61,21 @@ public:
 
     std::vector<AlarmNodeMapping> getAlarmNodeMappings();
 
+    using SqlValue = std::variant<std::nullptr_t, long long, double, bool, std::string>;
+    using Row = std::unordered_map<std::string, SqlValue>;
+
+    // Extract rows from a static table JSON file that follows:
+    // { "<tableName>": { "<entryKey>": { "columns": { ... } }, ... } }
+    std::vector<Row> extractTableRows(const std::string& tableName) const;
+
+    // Convenience: detect which root table exists (systems/plcs/equipment/objects)
+    std::optional<std::string> detectSingleRootTable() const;
+
+    // Return a vector of row objects for a static table file.
+    // Example: tableKey="systems" returns each entry's "columns" object.
+    std::vector<ordered_json> getStaticRows(const std::string& tableKey) const;
+
+
 
 private:
 

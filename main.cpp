@@ -122,9 +122,6 @@ void runDataProcessingLoop(OPCUAClientManager& opcua_client_manager,
                         mappedDataPtr = std::move(newMap);
                     }
                     ::LOG_INFO("Reloaded nodeId map from: " + nodeIdFile);
-
-                    // NOTE: we are NOT hot-reloading alarm subscription here (yet).
-                    // That would be a separate step: detect changes -> rebuild subscription.
                 }
             }
 
@@ -144,7 +141,7 @@ void runDataProcessingLoop(OPCUAClientManager& opcua_client_manager,
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
-            constexpr long long POLL_PERIOD_US = 5'000'000; // 5 seconds (your sampling frequency)
+            constexpr long long POLL_PERIOD_US = 5'000'000; // 5 seconds
             long long sleepUs = std::max<long long>(0, POLL_PERIOD_US - duration.count());
             std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         }
@@ -195,12 +192,7 @@ void startOPCUAClientThread(const std::vector<std::string>& opcua_credentials,
         auto mappedDataPtr = std::make_shared<MapType>(file_manager.mapNodeIdToObjectId());
         std::mutex mappedMutex;
 
-        // -----------------------
-        // ALARMS (integrated here)
-        // -----------------------
-        // IMPORTANT: this must match your NEW FileManager method + NEW OPCUA subscription signature.
-        // - file_manager.getAlarmNodeMappings() returns vector<AlarmNodeMapping/AlarmMapping>
-        // - opcua_client_manager.setSubscription(interval, sampling, mappings)
+        // Alarms subscription
         {
             const auto alarmMappings = file_manager.getAlarmNodeMappings();
             opcua_client_manager.setSubscription(100, 100, alarmMappings);
@@ -242,9 +234,8 @@ void initialize() {
         // ----------------------------
         // CREATE DB SCHEMA ONCE (HERE)
         // ----------------------------
-        // Do it once at startup. If tables already exist, your method uses IF NOT EXISTS, so safe.
         {
-            const std::string schemaFile = "/home/felipevillazon/Xelips/dbSchema.JSON"; // <-- adjust if needed
+            const std::string schemaFile = "/home/felipevillazon/Xelips/dbSchemaV2.JSON"; // <-- your schema file
             if (!connectToSQL(sql_client_manager_1)) {
                 ::LOG_ERROR("Cannot connect to SQL to create schema. Exiting initialization.");
                 return;
@@ -252,6 +243,81 @@ void initialize() {
             sql_client_manager_1.createDatabaseSchema(schemaFile);
             ::LOG_INFO("Schema creation done (or verified).");
         }
+
+        // -----------------------------------------
+        // UPSERT STATIC TABLES ONCE AT STARTUP (HERE)
+        // -----------------------------------------
+        {
+            const std::string systemsFile   = "/home/felipevillazon/Xelips/systems.JSON";
+            const std::string plcsFile      = "/home/felipevillazon/Xelips/plcs.JSON";
+            const std::string equipmentFile = "/home/felipevillazon/Xelips/equipment.JSON";
+            const std::string objectsFile   = "/home/felipevillazon/Xelips/objects.JSON";
+
+            // (connect already done above for sql_client_manager_1)
+            sql_client_manager_1.upsertStaticTableFromFile("systems",   "systems",   systemsFile,   "system_id");
+            sql_client_manager_1.upsertStaticTableFromFile("plcs",      "plcs",      plcsFile,      "plc_id");
+            sql_client_manager_1.upsertStaticTableFromFile("equipment", "equipment", equipmentFile, "equipment_id");
+            sql_client_manager_1.upsertStaticTableFromFile("objects",   "objects",   objectsFile,   "object_id");
+
+            ::LOG_INFO("Static tables upsert completed at startup.");
+        }
+
+        // -------------------------------------------------------
+        // WATCH STATIC JSON FILES AND RE-UPSERT WHEN THEY CHANGE
+        // -------------------------------------------------------
+        std::thread staticWatcher([&] {
+            // Use a dedicated FileManager to track last_write_time state
+            FileManager fm;
+
+            const std::string systemsFile   = "/home/felipevillazon/Xelips/systems.JSON";
+            const std::string plcsFile      = "/home/felipevillazon/Xelips/plcs.JSON";
+            const std::string equipmentFile = "/home/felipevillazon/Xelips/equipment.JSON";
+            const std::string objectsFile   = "/home/felipevillazon/Xelips/objects.JSON";
+
+            // Initialize the watch state (first call stores timestamps and returns false)
+            (void)fm.hasFileBeenModified(systemsFile);
+            (void)fm.hasFileBeenModified(plcsFile);
+            (void)fm.hasFileBeenModified(equipmentFile);
+            (void)fm.hasFileBeenModified(objectsFile);
+
+            while (keepRunning) {
+                // Ensure SQL is connected for the updater (reconnect if needed)
+                if (!sql_client_manager_1.connect()) {
+                    ::LOG_INFO("Static watcher: SQL reconnect failed, retry in 2 seconds...");
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    continue;
+                }
+
+                bool changed = false;
+
+                if (fm.hasFileBeenModified(systemsFile)) {
+                    ::LOG_INFO("Detected change in systems.JSON -> upserting systems...");
+                    sql_client_manager_1.upsertStaticTableFromFile("systems", "systems", systemsFile, "system_id");
+                    changed = true;
+                }
+                if (fm.hasFileBeenModified(plcsFile)) {
+                    ::LOG_INFO("Detected change in plcs.JSON -> upserting plcs...");
+                    sql_client_manager_1.upsertStaticTableFromFile("plcs", "plcs", plcsFile, "plc_id");
+                    changed = true;
+                }
+                if (fm.hasFileBeenModified(equipmentFile)) {
+                    ::LOG_INFO("Detected change in equipment.JSON -> upserting equipment...");
+                    sql_client_manager_1.upsertStaticTableFromFile("equipment", "equipment", equipmentFile, "equipment_id");
+                    changed = true;
+                }
+                if (fm.hasFileBeenModified(objectsFile)) {
+                    ::LOG_INFO("Detected change in objects.JSON -> upserting objects...");
+                    sql_client_manager_1.upsertStaticTableFromFile("objects", "objects", objectsFile, "object_id");
+                    changed = true;
+                }
+
+                if (changed) {
+                    ::LOG_INFO("Static watcher: database updated from modified JSON files.");
+                }
+
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
+        });
 
         const std::string nodeIdFile_PLC_1 = "/home/felipe/nodeId.plc_1.JSON";
         const std::string nodeIdFile_PLC_2 = "/home/felipe/nodeId.plc_2.JSON";
@@ -267,6 +333,9 @@ void initialize() {
         opcuaThread2.join();
         opcuaThread3.join();
         opcuaThread4.join();
+
+        // stop watcher after PLC threads exit
+        if (staticWatcher.joinable()) staticWatcher.join();
 
     } catch (const std::exception& e) {
         std::cerr << "[FATAL ERROR] Initialization failed: " << e.what() << std::endl;

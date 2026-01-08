@@ -175,66 +175,74 @@ vector<string> FileManager::getSQLConnectionDetails() {
 std::unordered_map<std::string, std::tuple<int, std::string>> FileManager::mapNodeIdToObjectId() {
     ::LOG_INFO("FileManager::mapNodeIdToObjectId(): Building nodeId -> (object_id, table_name) map...");
 
-    // Keep your interface (minimal changes in rest of code)
     std::unordered_map<std::string, std::tuple<int, std::string>> nodeIdMap;
 
-    // Force a constant readings table (you can change it in one place later)
     static constexpr auto READINGS_TABLE = "object_readings";
 
-    // Validate expected structure
     if (!configData.contains("objects") || !configData["objects"].is_object()) {
         ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): Missing or invalid 'objects' section in JSON.");
         return nodeIdMap;
     }
 
-    // Iterate ONLY objects
     for (const auto& [objectKey, entry] : configData["objects"].items()) {
         if (!entry.is_object()) {
-            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' is not a JSON object. Skipping.");
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey +
+                        "' is not a JSON object. Skipping.");
             continue;
         }
 
         if (!entry.contains("columns") || !entry["columns"].is_object()) {
-            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' missing 'columns'. Skipping.");
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey +
+                        "' missing 'columns'. Skipping.");
             continue;
         }
 
         const auto& columns = entry["columns"];
 
-        // Required fields
-        int objectId = -1;
-        std::string nodeId;
-
-        if (columns.contains("object_id") && columns["object_id"].is_number_integer()) {
-            objectId = columns["object_id"].get<int>();
-        } else {
-            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' missing/invalid 'object_id'. Skipping.");
+        // ---- object_id (required) ----
+        if (!columns.contains("object_id") || !columns["object_id"].is_number_integer()) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey +
+                        "' missing/invalid 'object_id'. Skipping.");
             continue;
         }
 
-        if (columns.contains("object_node_id") && columns["object_node_id"].is_string()) {
-            nodeId = columns["object_node_id"].get<std::string>();
-        } else {
-            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' missing/invalid 'object_node_id'. Skipping.");
+        const int objectId = columns["object_id"].get<int>();
+
+        // ---- object_node_id (required but may be intentionally empty) ----
+        if (!columns.contains("object_node_id") || !columns["object_node_id"].is_string()) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey +
+                        "' missing/invalid 'object_node_id'. Skipping.");
             continue;
         }
 
-        if (nodeId.empty() || objectId < 0) {
-            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey + "' has empty nodeId or invalid objectId. Skipping.");
+        const std::string nodeId = columns["object_node_id"].get<std::string>();
+
+        //  KEY CHANGE: empty string means "do not consider this object"
+        if (nodeId.empty()) {
+            ::LOG_INFO("FileManager::mapNodeIdToObjectId(): object '" + objectKey +
+                       "' has empty object_node_id. Ignoring object_id " +
+                       std::to_string(objectId) + ".");
             continue;
         }
 
-        // Insert mapping (if duplicates exist, last wins — we also log it)
+        if (objectId < 0) {
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): object '" + objectKey +
+                        "' has invalid object_id. Skipping.");
+            continue;
+        }
+
+        // ---- Insert mapping ----
         auto it = nodeIdMap.find(nodeId);
         if (it != nodeIdMap.end()) {
-            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): Duplicate object_node_id '" + nodeId +
-                        "' found. Overwriting previous mapping.");
+            ::LOG_ERROR("FileManager::mapNodeIdToObjectId(): Duplicate object_node_id '" +
+                        nodeId + "' found. Overwriting previous mapping.");
         }
 
         nodeIdMap[nodeId] = std::make_tuple(objectId, std::string(READINGS_TABLE));
     }
 
-    ::LOG_INFO("FileManager::mapNodeIdToObjectId(): Done. Loaded " + std::to_string(nodeIdMap.size()) + " mappings.");
+    ::LOG_INFO("FileManager::mapNodeIdToObjectId(): Done. Loaded " +
+               std::to_string(nodeIdMap.size()) + " mappings.");
     return nodeIdMap;
 }
 
@@ -292,10 +300,9 @@ std::vector<FileManager::AlarmNodeMapping> FileManager::getAlarmNodeMappings() {
     // Support both keys: "objects" or "sensors"
     const char* rootKey = nullptr;
     if (configData.contains("objects")) rootKey = "objects";
-    else if (configData.contains("sensors")) rootKey = "sensors";
 
     if (!rootKey) {
-        LOG_ERROR("FileManager::getAlarmNodeMappings(): No 'objects' or 'sensors' section found.");
+        LOG_ERROR("FileManager::getAlarmNodeMappings(): No 'objects' section found.");
         return out;
     }
 
